@@ -1,0 +1,11 @@
+menu "Xiaozhi Assistant"
+
+config BOARD_TYPE_ZECTRIX_S3_EPAPER_4_2
+    bool "zectrix-s3-epaper-4.2 FT firmware"
+    default y
+    depends on IDF_TARGET_ESP32S3
+    help
+        This local repository has been reduced to a single FT-only firmware
+        for the zectrix-s3-epaper-4.2 board.
+
+endmenu
