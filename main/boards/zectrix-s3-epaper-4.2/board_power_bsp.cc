@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <driver/gpio.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include "board_power_bsp.h"
 #include "charge_status.h"
@@ -35,6 +36,7 @@ void BoardPowerBsp::PowerLedTask(void *arg) {
         ChargeStatus::Snapshot snap{};
         const bool has_status = self && self->charge_status_;
         if (has_status) {
+            self->charge_status_->Tick(esp_timer_get_time() / 1000);
             snap = self->charge_status_->Get();
         }
         gpio_hold_dis((gpio_num_t)GPIO_NUM_3);

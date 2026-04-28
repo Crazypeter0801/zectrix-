@@ -1,11 +1,36 @@
 menu "Xiaozhi Assistant"
 
 config BOARD_TYPE_ZECTRIX_S3_EPAPER_4_2
-    bool "zectrix-s3-epaper-4.2 FT firmware"
+    bool "zectrix-s3-epaper-4.2 firmware"
     default y
     depends on IDF_TARGET_ESP32S3
     help
-        This local repository has been reduced to a single FT-only firmware
-        for the zectrix-s3-epaper-4.2 board.
+        This local repository targets the zectrix-s3-epaper-4.2 board.
+
+config COINGECKO_DEMO_API_KEY
+    string "CoinGecko Demo API key"
+    default ""
+    help
+        Optional API key for CoinGecko's demo API. Leave empty to use the
+        public endpoint without an API key when available.
+
+config OTA_URL
+    string "Default OTA URL"
+    default "https://ota.zectrix.com/xiaozhi/ota/"
+    help
+        Default OTA URL used by the WiFi fast probe logic.
+
+config DEFAULT_WIFI_SSID
+    string "Default WiFi SSID"
+    default ""
+    help
+        Optional build-time WiFi SSID. Leave empty to use the device WiFi
+        configuration portal.
+
+config DEFAULT_WIFI_PASSWORD
+    string "Default WiFi password"
+    default ""
+    help
+        Optional build-time WiFi password paired with DEFAULT_WIFI_SSID.
 
 endmenu

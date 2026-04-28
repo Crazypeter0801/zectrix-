@@ -51,6 +51,7 @@ while [[ $# -gt 0 ]]; do
   board_type = zectrix-s3-epaper-4.2
   build_name = 与 board_type 相同
   ota_url = .env 中的 DEFAULT_OTA_URL 或 https://ota.zectrix.com/xiaozhi/ota/
+  btc_api = .env 中的 COINGECKO_DEMO_API_KEY（可选）
 
 参数:
   --no-rebuild   跳过 fullclean，增量编译（默认执行 fullclean 完整重编译）
@@ -117,6 +118,14 @@ load_idf_env() {
   fi
 }
 
+file_size() {
+  if stat -f%z "$1" >/dev/null 2>&1; then
+    stat -f%z "$1"
+  else
+    stat -c%s "$1"
+  fi
+}
+
 if ! command -v python3 >/dev/null 2>&1; then
   echo "[ERROR] 未检测到 python3，请先安装 Python 3" >&2
   exit 1
@@ -144,12 +153,12 @@ cleanup_temp_config() {
 trap cleanup_temp_config EXIT
 
 python3 - "$BOARD_CONFIG_PATH" "$TEMP_CONFIG_PATH" "$BUILD_NAME" "$OTA_URL" \
-  "${DEFAULT_WIFI_SSID:-}" "${DEFAULT_WIFI_PASSWORD:-}" <<'PY'
+  "${DEFAULT_WIFI_SSID:-}" "${DEFAULT_WIFI_PASSWORD:-}" "${COINGECKO_DEMO_API_KEY:-}" <<'PY'
 import json
 import os
 import sys
 
-config_path, output_path, build_name, ota_url, wifi_ssid, wifi_password = sys.argv[1:7]
+config_path, output_path, build_name, ota_url, wifi_ssid, wifi_password, coingecko_api_key = sys.argv[1:8]
 
 with open(config_path, "r", encoding="utf-8") as f:
     config = json.load(f)
@@ -173,6 +182,8 @@ injections = {
 if wifi_ssid:
     injections["CONFIG_DEFAULT_WIFI_SSID"] = f'"{wifi_ssid}"'
     injections["CONFIG_DEFAULT_WIFI_PASSWORD"] = f'"{wifi_password}"'
+if coingecko_api_key:
+    injections["CONFIG_COINGECKO_DEMO_API_KEY"] = f'"{coingecko_api_key}"'
 
 for key, value in injections.items():
     entry = f"{key}={value}"
@@ -213,12 +224,12 @@ if [[ -z "$LATEST_ZIP" ]]; then
   exit 1
 fi
 
-ZIP_SIZE="$(stat -c%s "$LATEST_ZIP")"
+ZIP_SIZE="$(file_size "$LATEST_ZIP")"
 BIN_PATH="build/merged-binary.bin"
 BIN_SIZE="0"
 
 if [[ -f "$BIN_PATH" ]]; then
-  BIN_SIZE="$(stat -c%s "$BIN_PATH")"
+  BIN_SIZE="$(file_size "$BIN_PATH")"
 fi
 
 echo "[OK] 打包完成"
@@ -234,7 +245,9 @@ if [[ -f "$BIN_PATH" ]]; then
   for target_dir in "$MANAGER_NEXT_DIR/public/firmware" "$MANAGER_NEXT_DIR/out/firmware"; do
     mkdir -p "$target_dir"
     cp "$BIN_PATH" "$target_dir/merged-binary.bin"
-    cp "$PROJECT_DIR/changelog.md" "$target_dir/changelog.md"
+    if [[ -f "$PROJECT_DIR/changelog.md" ]]; then
+      cp "$PROJECT_DIR/changelog.md" "$target_dir/changelog.md"
+    fi
     cat > "$target_dir/firmware-info.json" <<FWEOF
 {
   "version": "$FW_VERSION",
@@ -256,7 +269,7 @@ FWEOF
     mkdir -p "$OTA_BIN_DIR"
     OTA_BIN_NAME="${BUILD_NAME}_${FW_VERSION#v}.bin"
     cp "$OTA_BIN" "$OTA_BIN_DIR/$OTA_BIN_NAME"
-    echo "[OK] 已复制 OTA 固件: data/bin/$OTA_BIN_NAME ($(stat -c%s "$OTA_BIN") bytes)"
+    echo "[OK] 已复制 OTA 固件: data/bin/$OTA_BIN_NAME ($(file_size "$OTA_BIN") bytes)"
   else
     echo "[WARN] 未找到 $OTA_BIN，跳过 OTA 固件复制"
   fi

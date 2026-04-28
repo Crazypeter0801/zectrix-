@@ -10,6 +10,8 @@
 #include <memory>
 
 class FactoryTestPageAdapter;
+class MealPickerPageAdapter;
+class FeatureMenuPageAdapter;
 
 class LcdDisplay : public LvglDisplay {
 protected:
@@ -19,6 +21,8 @@ protected:
 
     UiPageRegistry page_registry_;
     FactoryTestPageAdapter* factory_test_page_adapter_ = nullptr;
+    MealPickerPageAdapter* meal_picker_page_adapter_ = nullptr;
+    FeatureMenuPageAdapter* feature_menu_page_adapter_ = nullptr;
     bool ui_setup_done_ = false;
 
     void ShowScreen(lv_obj_t* scr);
@@ -30,6 +34,8 @@ protected:
     void Unlock() override;
 
     friend class FactoryTestPageAdapter;
+    friend class MealPickerPageAdapter;
+    friend class FeatureMenuPageAdapter;
 
     LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width, int height);
 
@@ -46,6 +52,9 @@ public:
     UiPageId GetActivePageId() const;
     void DispatchPageEvent(const UiPageEvent& e, bool only_active = true);
     void ShowFactoryTestPage();
+    void ShowMealPickerPage();
+    void ShowFeatureMenuPage();
+    void RefreshMealPickerSystemInfo();
     bool IsFactoryTestPageActive();
     FactoryTestPageAdapter* GetFactoryTestPageAdapter() { return factory_test_page_adapter_; }
 };

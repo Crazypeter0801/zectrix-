@@ -1,47 +1,35 @@
-# ZecTrix Note4 — 开源便利贴固件（BTC 版）
+# ZecTrix E-Paper Note Firmware
 
-基于 [极趣实验室](https://wiki.zectrix.com) 开源的 **ZecTrix Note4** 水墨屏便利贴基础固件，二次开发的个人项目，目标是在这台可爱的小设备上逐步集成更多实用功能。
+This repository is a community firmware workspace for the ZecTrix 4.2-inch
+e-paper sticky note device.
 
-## 硬件
+## Current Custom Feature
 
-- **主控**：ESP32-S3 N16R8
-- **屏幕**：SSD1683 驱动的 4.2" 400×300 黑白电子墨水屏
-- **周边**：NFC、RTC (PCF8563)、麦克风 + 喇叭、物理按键 × 4、充电管理
+The default screen is now an offline meal picker:
 
-## 功能
+- Shows "今天吃什么？" on boot.
+- Press the confirm button to randomly pick a restaurant.
+- Avoids picking the same restaurant twice in a row.
+- Works fully offline with no Wi-Fi, VPN, or external API dependency.
 
-- 🛠 **工厂测试页**（Demo）：沿用官方自检流程，可验证硬件各模块
-- 💰 **比特币价格看板**（开发中）：从 [CoinGecko](https://www.coingecko.com) 拉取 BTC 实时价格，每 60s 刷新，**CNY + USD 双币种** + 24h 涨跌
-- 📶 Wi-Fi 配网（AP 模式）+ NVS 凭据持久化
+The current built-in restaurant list is:
 
-## 构建
-
-依赖 **ESP-IDF ≥ 5.4**：
-
-```bash
-# 1) 激活 IDF 环境
-. ~/esp/esp-idf/export.sh
-
-# 2) 项目根编译（4.2 寸水墨板）
-./build.sh --no-rebuild zectrix-s3-epaper-4.2 zectrix-s3-epaper-4.2
-
-# 3) 烧录 + 串口日志
-idf.py -p /dev/tty.usbmodem* -b 921600 flash monitor
+```text
+蒸小野、Blend、老碗会、想面、饺子、茶餐厅、兰州拉面、螺蛳粉、煲仔饭、三及第、超级碗
 ```
 
-## Roadmap
+## Build
 
-- [x] 基础固件 baseline（导入自 ZecTrix 开源）
-- [ ] 比特币价格页 v0.1（MVP：CNY + USD + 24h 涨跌）
-- [ ] SNTP 校时 + 绝对时间显示
-- [ ] 44 px 专用数字字体
-- [ ] 按键切页 / 多页面切换
-- [ ] 更多页面（天气、待办、日历、多币种）
+Install and activate ESP-IDF first, then run:
 
-## License
+```bash
+./build.sh
+```
 
-MIT，详见 [LICENSE](LICENSE)。
+The current project targets `esp32s3` and the `zectrix-s3-epaper-4.2` board.
 
-## 致谢
+## Notes
 
-感谢 [极趣实验室](https://wiki.zectrix.com/zh/software/opensource) 开源这款可爱的小设备及其基础固件。
+This firmware is for personal display and automation experiments. The previous
+BTC price experiment is kept in the source tree for future reuse, but it is not
+part of the current default build path.

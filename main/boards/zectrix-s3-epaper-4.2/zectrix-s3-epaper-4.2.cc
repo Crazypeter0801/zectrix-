@@ -20,6 +20,7 @@
 #include "config.h"
 #include "custom_lcd_display.h"
 #include "display/pages/factory_test_page_adapter.h"
+#include "display/ui_page.h"
 #include "network_interface.h"
 #include "rtc_pcf8563.h"
 
@@ -108,7 +109,7 @@ public:
     }
 
     bool IsFactoryTestMode() const override {
-        return true;
+        return false;
     }
 
     void EnterFactoryTestFlow() override {
@@ -141,11 +142,11 @@ public:
     }
 
     std::string GetBoardJson() override {
-        return R"({"type":"zectrix-s3-epaper-4.2","mode":"factory_test"})";
+        return R"({"type":"zectrix-s3-epaper-4.2","mode":"meal_picker"})";
     }
 
     std::string GetDeviceStatusJson() override {
-        return R"({"mode":"factory_test"})";
+        return R"({"mode":"meal_picker"})";
     }
 
     RtcPcf8563* GetRtc() {
@@ -266,20 +267,62 @@ private:
 
     void InitializeButtons() {
         up_button_.OnPressDown([this]() {
-            FactoryTestService::Instance().HandleButton(FactoryTestButton::kUpClick);
+            if (IsFactoryTestPageActive()) {
+                FactoryTestService::Instance().HandleButton(FactoryTestButton::kUpClick);
+                return;
+            }
+
+            DispatchDisplayEvent(UiPageEventType::UpPressed);
+        });
+
+        up_button_.OnLongPress([this]() {
+            if (IsFactoryTestPageActive()) {
+                return;
+            }
+
+            if (display_ != nullptr) {
+                display_->ShowFeatureMenuPage();
+            }
         });
 
         down_button_.OnPressDown([this]() {
-            FactoryTestService::Instance().HandleButton(FactoryTestButton::kDownClick);
+            if (IsFactoryTestPageActive()) {
+                FactoryTestService::Instance().HandleButton(FactoryTestButton::kDownClick);
+                return;
+            }
+
+            DispatchDisplayEvent(UiPageEventType::DownPressed);
         });
 
         confirm_button_.OnPressDown([this]() {
-            FactoryTestService::Instance().HandleButton(FactoryTestButton::kConfirmClick);
+            if (IsFactoryTestPageActive()) {
+                FactoryTestService::Instance().HandleButton(FactoryTestButton::kConfirmClick);
+                return;
+            }
+
+            DispatchDisplayEvent(UiPageEventType::ConfirmPressed);
         });
 
         confirm_button_.OnLongPress([this]() {
-            FactoryTestService::Instance().HandleButton(FactoryTestButton::kConfirmLongPress);
+            if (IsFactoryTestPageActive()) {
+                FactoryTestService::Instance().HandleButton(FactoryTestButton::kConfirmLongPress);
+            }
         });
+    }
+
+    bool IsFactoryTestPageActive() const {
+        return display_ != nullptr && display_->IsFactoryTestPageActive();
+    }
+
+    void DispatchDisplayEvent(UiPageEventType type) {
+        if (display_ == nullptr) {
+            return;
+        }
+
+        UiPageEvent event = {};
+        event.type = type;
+        display_->DispatchPageEvent(event);
+        display_->RequestUrgentRefresh();
     }
 
     void BindFactoryTestCallbacks() {
@@ -408,6 +451,24 @@ extern "C" ChargeStatus::Snapshot ZectrixRefreshChargeSnapshotForFactoryTest() {
 extern "C" bool ZectrixReadBatteryPercentForFactoryTest(int* level) {
     auto& board = static_cast<CustomBoard&>(Board::GetInstance());
     return board.ReadBatteryPercentForFactoryTest(level);
+}
+
+extern "C" bool ZectrixReadBatteryPercent(int* level) {
+    auto& board = static_cast<CustomBoard&>(Board::GetInstance());
+    return board.ReadBatteryPercentForFactoryTest(level);
+}
+
+extern "C" bool ZectrixReadLocalDate(tm* out_local_tm) {
+    if (out_local_tm == nullptr) {
+        return false;
+    }
+
+    auto& board = static_cast<CustomBoard&>(Board::GetInstance());
+    RtcPcf8563* rtc = board.GetRtc();
+    if (rtc == nullptr) {
+        return false;
+    }
+    return rtc->GetTime(*out_local_tm);
 }
 
 extern "C" void ZectrixSetFactoryLedOverride(bool enabled, bool blink) {

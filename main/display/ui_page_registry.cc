@@ -10,6 +10,18 @@ const char* UiPageIdName(UiPageId id) {
     switch (id) {
         case UiPageId::FactoryTest:
             return "FactoryTest";
+        case UiPageId::MealPicker:
+            return "MealPicker";
+        case UiPageId::FeatureMenu:
+            return "FeatureMenu";
+        case UiPageId::AnswerBook:
+            return "AnswerBook";
+        case UiPageId::Almanac:
+            return "Almanac";
+        case UiPageId::CalendarTime:
+            return "CalendarTime";
+        case UiPageId::Settings:
+            return "Settings";
         default:
             return "Unknown";
     }
@@ -72,7 +84,6 @@ bool UiPageRegistry::SwitchTo(UiPageId id) {
         return true;
     }
 
-    const UiPageId from_id = active_id_;
     if (has_active_ && active_page_) {
         active_page_->OnHide();
     }
@@ -118,6 +129,6 @@ void UiPageRegistry::ForEach(const std::function<void(IUiPage*)>& fn) {
 void UiPageRegistry::Reset() {
     pages_.clear();
     active_page_ = nullptr;
-    active_id_ = UiPageId::FactoryTest;
+    active_id_ = UiPageId::MealPicker;
     has_active_ = false;
 }

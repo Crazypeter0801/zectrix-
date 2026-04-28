@@ -1,7 +1,9 @@
 #include "lcd_display.h"
 
 #include "lvgl_theme.h"
+#include "pages/feature_pages_adapter.h"
 #include "pages/factory_test_page_adapter.h"
+#include "pages/meal_picker_page_adapter.h"
 #include "settings.h"
 
 #include <esp_log.h>
@@ -79,6 +81,8 @@ LcdDisplay::~LcdDisplay() {
         DisplayLockGuard lock(this);
         page_registry_.Reset();
         factory_test_page_adapter_ = nullptr;
+        meal_picker_page_adapter_ = nullptr;
+        feature_menu_page_adapter_ = nullptr;
         ui_setup_done_ = false;
         if (factory_test_screen_ != nullptr) {
             lv_obj_del(factory_test_screen_);
@@ -146,6 +150,24 @@ void LcdDisplay::ShowFactoryTestPage() {
     (void)SwitchPage(UiPageId::FactoryTest);
 }
 
+void LcdDisplay::ShowMealPickerPage() {
+    (void)SwitchPage(UiPageId::MealPicker);
+}
+
+void LcdDisplay::ShowFeatureMenuPage() {
+    (void)SwitchPage(UiPageId::FeatureMenu);
+    RequestUrgentRefresh();
+}
+
+void LcdDisplay::RefreshMealPickerSystemInfo() {
+    DisplayLockGuard lock(this);
+    if (meal_picker_page_adapter_ == nullptr) {
+        return;
+    }
+    meal_picker_page_adapter_->RefreshSystemInfo();
+    RequestUrgentRefresh();
+}
+
 bool LcdDisplay::IsFactoryTestPageActive() {
     DisplayLockGuard lock(this);
     return page_registry_.HasActive() && page_registry_.ActiveId() == UiPageId::FactoryTest;
@@ -164,8 +186,35 @@ void LcdDisplay::SetupUI() {
         return;
     }
 
-    if (!SwitchPageLocked(UiPageId::FactoryTest)) {
-        ESP_LOGW(kTag, "Failed to switch to FT page");
+    auto meal_picker_page = std::make_unique<MealPickerPageAdapter>(this);
+    meal_picker_page_adapter_ = meal_picker_page.get();
+    if (!RegisterPageLocked(std::move(meal_picker_page))) {
+        meal_picker_page_adapter_ = nullptr;
+        return;
+    }
+
+    auto feature_menu_page = std::make_unique<FeatureMenuPageAdapter>(this);
+    feature_menu_page_adapter_ = feature_menu_page.get();
+    if (!RegisterPageLocked(std::move(feature_menu_page))) {
+        feature_menu_page_adapter_ = nullptr;
+        return;
+    }
+
+    if (!RegisterPageLocked(std::make_unique<AnswerBookPageAdapter>(this))) {
+        return;
+    }
+    if (!RegisterPageLocked(std::make_unique<AlmanacPageAdapter>(this))) {
+        return;
+    }
+    if (!RegisterPageLocked(std::make_unique<CalendarTimePageAdapter>(this))) {
+        return;
+    }
+    if (!RegisterPageLocked(std::make_unique<SettingsPageAdapter>(this))) {
+        return;
+    }
+
+    if (!SwitchPageLocked(UiPageId::MealPicker)) {
+        ESP_LOGW(kTag, "Failed to switch to meal picker page");
         return;
     }
 

@@ -11,7 +11,9 @@ set(SOURCES
     "display/display.cc"
     "display/lcd_display.cc"
     "display/ui_page_registry.cc"
+    "display/pages/feature_pages_adapter.cc"
     "display/pages/factory_test_page_adapter.cc"
+    "display/pages/meal_picker_page_adapter.cc"
     "display/lvgl_display/lvgl_display.cc"
     "display/lvgl_display/lvgl_theme.cc"
     "display/lvgl_display/lvgl_font.cc"
@@ -36,6 +38,7 @@ set(INCLUDE_DIRS
     "audio"
     "display"
     "display/lvgl_display"
+    "services"
     "protocols"
     "boards/common"
 )
@@ -43,6 +46,29 @@ set(INCLUDE_DIRS
 idf_component_register(
     SRCS ${SOURCES}
     INCLUDE_DIRS ${INCLUDE_DIRS}
+    REQUIRES
+        "78__esp-ml307"
+        "78__esp-opus"
+        "78__esp-opus-encoder"
+        "78__esp-wifi-connect"
+        "78__xiaozhi-fonts"
+        "app_update"
+        "efuse"
+        "esp_http_client"
+        "esp-tls"
+        "esp_driver_gpio"
+        "esp_driver_i2c"
+        "esp_driver_i2s"
+        "esp_driver_spi"
+        "esp_event"
+        "esp_lcd"
+        "esp_netif"
+        "esp_partition"
+        "esp_timer"
+        "esp_wifi"
+        "json"
+        "nvs_flash"
+        "spi_flash"
 )
 
 target_compile_definitions(

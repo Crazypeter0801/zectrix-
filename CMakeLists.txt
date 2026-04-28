@@ -14,3 +14,12 @@ add_compile_options(-Wno-missing-field-initializers)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(xiaozhi)
+
+if(TARGET __idf_espressif2022__esp_emote_gfx)
+    target_compile_options(
+        __idf_espressif2022__esp_emote_gfx
+        PRIVATE
+            -Wno-error=format
+            -include string.h
+    )
+endif()

@@ -19,11 +19,11 @@ static void LogNvsStats() {
         ESP_LOGW(TAG, "NVS stats read failed: %s", esp_err_to_name(ret));
         return;
     }
-    uint32_t used = stats.used_entries;
-    uint32_t total = stats.total_entries;
-    uint32_t free_entries = stats.free_entries;
-    uint32_t percent = (total > 0) ? (used * 100U / total) : 0;
-    ESP_LOGI(TAG, "NVS stats: used=%u free=%u total=%u (%u%%) namespaces=%u",
+    size_t used = stats.used_entries;
+    size_t total = stats.total_entries;
+    size_t free_entries = stats.free_entries;
+    size_t percent = (total > 0) ? (used * 100U / total) : 0;
+    ESP_LOGI(TAG, "NVS stats: used=%zu free=%zu total=%zu (%zu%%) namespaces=%zu",
              used, free_entries, total, percent, stats.namespace_count);
 }
 

@@ -9,10 +9,19 @@
 
 enum class UiPageId : uint8_t {
     FactoryTest = 0,
+    MealPicker = 1,
+    FeatureMenu = 2,
+    AnswerBook = 3,
+    Almanac = 4,
+    CalendarTime = 5,
+    Settings = 6,
 };
 
 enum class UiPageEventType : uint8_t {
     Custom = 0,
+    ConfirmPressed = 1,
+    UpPressed = 2,
+    DownPressed = 3,
 };
 
 struct UiPageEvent {
