@@ -7,6 +7,7 @@
 
 #include "audio_service.h"
 #include "device_state.h"
+#include "services/bitcoin_price_service.h"
 
 class Application {
 public:
@@ -30,6 +31,8 @@ public:
     void MuteSound();
     void StopSound();
     bool CanEnterSleepMode() const;
+    void StartBitcoinPriceService();
+    void RequestBitcoinPriceRefresh();
 
     AudioService& GetAudioService() { return audio_service_; }
 
@@ -39,6 +42,7 @@ private:
 
     std::atomic<DeviceState> state_{kDeviceStateUnknown};
     AudioService audio_service_;
+    BitcoinPriceService bitcoin_price_service_;
 };
 
 #endif  // _APPLICATION_H_

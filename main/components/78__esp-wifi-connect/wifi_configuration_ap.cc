@@ -1,5 +1,6 @@
 #include "wifi_configuration_ap.h"
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
@@ -16,6 +17,7 @@
 #if !CONFIG_IDF_TARGET_ESP32P4
 #include <esp_smartconfig.h>
 #endif
+#include "market_watchlist.h"
 #include "ssid_manager.h"
 #include "sdkconfig.h"
 
@@ -26,6 +28,52 @@
 
 extern const char index_html_start[] asm("_binary_wifi_configuration_html_start");
 extern const char done_html_start[] asm("_binary_wifi_configuration_done_html_start");
+
+namespace {
+
+bool ReceiveRequestBody(httpd_req_t* req, std::string* out, size_t max_len) {
+    if (req == nullptr || out == nullptr || req->content_len > max_len) {
+        return false;
+    }
+
+    out->assign(req->content_len, '\0');
+    size_t received = 0;
+    while (received < req->content_len) {
+        const int ret = httpd_req_recv(req,
+                                       out->data() + received,
+                                       req->content_len - received);
+        if (ret <= 0) {
+            return false;
+        }
+        received += static_cast<size_t>(ret);
+    }
+    return true;
+}
+
+void SendJson(httpd_req_t* req, const std::string& json) {
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_send(req, json.c_str(), json.size());
+}
+
+std::string ErrorJson(const std::string& error) {
+    cJSON* root = cJSON_CreateObject();
+    if (root == nullptr) {
+        return "{\"success\":false,\"error\":\"Internal error\"}";
+    }
+    cJSON_AddBoolToObject(root, "success", false);
+    cJSON_AddStringToObject(root, "error", error.c_str());
+    char* printed = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (printed == nullptr) {
+        return "{\"success\":false,\"error\":\"Internal error\"}";
+    }
+    std::string result = printed;
+    free(printed);
+    return result;
+}
+
+}  // namespace
 
 WifiConfigurationAp::WifiConfigurationAp()
 {
@@ -220,7 +268,7 @@ void WifiConfigurationAp::StartWebServer()
 {
     // Start the web server
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 24;
+    config.max_uri_handlers = 28;
     config.uri_match_fn = httpd_uri_match_wildcard;
     // 5G Network takes longer to connect
     config.recv_wait_timeout = 15;
@@ -467,6 +515,43 @@ void WifiConfigurationAp::StartWebServer()
         .user_ctx = this
     };
     ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &exit_config));
+
+    // Register the local market watchlist APIs
+    httpd_uri_t market_watchlist_get = {
+        .uri = "/market/watchlist",
+        .method = HTTP_GET,
+        .handler = [](httpd_req_t *req) -> esp_err_t {
+            SendJson(req, MarketWatchlist::ToJsonResponse(MarketWatchlist::Load()));
+            return ESP_OK;
+        },
+        .user_ctx = NULL
+    };
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &market_watchlist_get));
+
+    httpd_uri_t market_watchlist_post = {
+        .uri = "/market/watchlist",
+        .method = HTTP_POST,
+        .handler = [](httpd_req_t *req) -> esp_err_t {
+            std::string body;
+            if (!ReceiveRequestBody(req, &body, 4096)) {
+                SendJson(req, ErrorJson("Payload too large or receive failed"));
+                return ESP_OK;
+            }
+
+            std::vector<MarketWatchItem> items;
+            std::string error;
+            if (!MarketWatchlist::ParseJson(body, &items, &error) ||
+                !MarketWatchlist::Save(items, &error)) {
+                SendJson(req, ErrorJson(error.empty() ? "Failed to save watchlist" : error));
+                return ESP_OK;
+            }
+
+            SendJson(req, MarketWatchlist::ToJsonResponse(MarketWatchlist::Load()));
+            return ESP_OK;
+        },
+        .user_ctx = NULL
+    };
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &market_watchlist_post));
 
     auto captive_portal_handler = [](httpd_req_t *req) -> esp_err_t {
         auto *this_ = static_cast<WifiConfigurationAp *>(req->user_ctx);

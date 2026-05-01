@@ -19,6 +19,7 @@ public:
 
     void SetSnapshotCallback(std::function<void(const BitcoinPriceSnapshot&)> callback);
     void Start();
+    void RequestRefresh();
 
 private:
     static void TaskEntry(void* arg);
@@ -27,10 +28,7 @@ private:
     void TaskLoop();
     void HandleWifiEvent(int event);
     bool EnsureWifiStarted();
-    bool FetchPrice(double* price_usd,
-                    double* change_24h_percent,
-                    int64_t* last_updated_at,
-                    std::string* error);
+    bool FetchPrice(BitcoinPriceSnapshot* snapshot, std::string* error);
     BitcoinPriceSnapshot CurrentSnapshot();
     void PublishSnapshot(const BitcoinPriceSnapshot& snapshot);
     std::string BuildNetworkDetail();

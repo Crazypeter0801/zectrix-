@@ -6,6 +6,8 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 
+#include <algorithm>
+#include <cstring>
 #include <memory>
 
 #include "FT/factory_test_service.h"
@@ -21,8 +23,10 @@
 #include "custom_lcd_display.h"
 #include "display/pages/factory_test_page_adapter.h"
 #include "display/ui_page.h"
+#include "display/ui_status.h"
 #include "network_interface.h"
 #include "rtc_pcf8563.h"
+#include "wifi_manager.h"
 
 namespace {
 
@@ -68,11 +72,10 @@ public:
         : up_button_(TODO_UP_BUTTON_GPIO, false, kNavLongPressMs),
           down_button_(TODO_DOWN_BUTTON_GPIO, false, kNavLongPressMs),
           confirm_button_(BOOT_BUTTON_GPIO, false, kNavLongPressMs) {
+        InitializeChargeStatus();
         InitializePower();
         InitializeI2c();
         InitializeRtc();
-        InitializeNfc();
-        InitializeChargeStatus();
         InitializeLcdDisplay();
         InitializeButtons();
         BindFactoryTestCallbacks();
@@ -83,6 +86,11 @@ public:
     }
 
     AudioCodec* GetAudioCodec() override {
+        if (power_ != nullptr) {
+            power_->PowerAudioOn();
+            power_->PowerAmpOff();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
         static Es8311AudioCodec codec(i2c_bus_,
                                       I2C_NUM_0,
                                       AUDIO_INPUT_SAMPLE_RATE,
@@ -154,6 +162,9 @@ public:
     }
 
     ZectrixNfc* GetNfc() {
+        if (nfc_ == nullptr) {
+            InitializeNfc();
+        }
         return nfc_.get();
     }
 
@@ -178,6 +189,27 @@ public:
         return ok;
     }
 
+    bool ReadBatteryUiStatus(int* level, int* voltage_mv, bool* charging, bool* power_present) {
+        uint16_t voltage = 0;
+        uint8_t percent = 0;
+        const bool ok = ReadBatteryStatus(voltage, percent);
+        if (level != nullptr) {
+            *level = static_cast<int>(percent);
+        }
+        if (voltage_mv != nullptr) {
+            *voltage_mv = static_cast<int>(voltage);
+        }
+
+        const ChargeStatus::Snapshot snapshot = charge_status_.Get();
+        if (charging != nullptr) {
+            *charging = snapshot.charging;
+        }
+        if (power_present != nullptr) {
+            *power_present = snapshot.power_present;
+        }
+        return ok;
+    }
+
     void SetFactoryLedOverride(bool enabled, bool blink) {
         if (power_ != nullptr) {
             power_->SetFactoryLedOverride(enabled, blink);
@@ -196,7 +228,8 @@ private:
                                                  VBAT_PWR_PIN,
                                                  &charge_status_);
         power_->VbatPowerOn();
-        power_->PowerAudioOn();
+        power_->PowerAmpOff();
+        power_->PowerAudioOff();
         power_->PowerEpdOn();
         while (!gpio_get_level(VBAT_PWR_GPIO)) {
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -294,6 +327,14 @@ private:
             DispatchDisplayEvent(UiPageEventType::DownPressed);
         });
 
+        down_button_.OnLongPress([this]() {
+            if (IsFactoryTestPageActive()) {
+                return;
+            }
+
+            DispatchDisplayEvent(UiPageEventType::DownLongPressed);
+        });
+
         confirm_button_.OnPressDown([this]() {
             if (IsFactoryTestPageActive()) {
                 FactoryTestService::Instance().HandleButton(FactoryTestButton::kConfirmClick);
@@ -389,25 +430,130 @@ private:
         return static_cast<uint16_t>(raw_voltage * 2);
     }
 
-    bool ReadBatteryStatus(uint16_t& voltage_mv, uint8_t& percent) {
-        int voltage_sum = 0;
-        for (int i = 0; i < 10; ++i) {
-            voltage_sum += ReadBatteryVoltage();
+    static uint8_t PercentFromBatteryVoltage(uint16_t voltage_mv) {
+        struct Point {
+            uint16_t mv;
+            uint8_t percent;
+        };
+
+        // Conservative 1-cell LiPo open-circuit curve. It keeps the low end
+        // useful instead of reporting 0% while the device can still run.
+        static constexpr Point kCurve[] = {
+            {3300, 0},
+            {3400, 3},
+            {3500, 8},
+            {3600, 15},
+            {3650, 22},
+            {3700, 30},
+            {3740, 40},
+            {3790, 50},
+            {3850, 60},
+            {3920, 70},
+            {4000, 82},
+            {4100, 92},
+            {4200, 100},
+        };
+
+        if (voltage_mv <= kCurve[0].mv) {
+            return kCurve[0].percent;
+        }
+        for (size_t i = 1; i < sizeof(kCurve) / sizeof(kCurve[0]); ++i) {
+            const Point& lo = kCurve[i - 1];
+            const Point& hi = kCurve[i];
+            if (voltage_mv <= hi.mv) {
+                const int mv_span = static_cast<int>(hi.mv - lo.mv);
+                const int percent_span = static_cast<int>(hi.percent) - static_cast<int>(lo.percent);
+                const int mv_delta = static_cast<int>(voltage_mv - lo.mv);
+                return static_cast<uint8_t>(static_cast<int>(lo.percent) +
+                                            (percent_span * mv_delta + mv_span / 2) / mv_span);
+            }
+        }
+        return 100;
+    }
+
+    static uint8_t SmoothBatteryPercent(uint8_t previous,
+                                        uint8_t next,
+                                        bool initialized,
+                                        bool power_present,
+                                        bool full) {
+        if (!initialized || full) {
+            return next;
         }
 
-        const int average_voltage = voltage_sum / 10;
+        const int prev = static_cast<int>(previous);
+        int value = static_cast<int>(next);
+        const int delta = value - prev;
+        if (power_present) {
+            // Charging voltage is inflated by the charger, so rise slowly.
+            if (delta > 3) {
+                value = prev + 3;
+            } else if (delta < -8) {
+                value = prev - 8;
+            }
+        } else {
+            // On battery, avoid upward jumps caused by load recovery.
+            if (delta > 1) {
+                value = prev + 1;
+            } else if (delta < -6) {
+                value = prev - 6;
+            }
+        }
+        return static_cast<uint8_t>(std::clamp(value, 0, 100));
+    }
+
+    bool ReadBatteryStatus(uint16_t& voltage_mv, uint8_t& percent) {
+        int voltage_sum = 0;
+        int min_voltage = 5000;
+        int max_voltage = 0;
+        int valid_samples = 0;
+        for (int i = 0; i < 16; ++i) {
+            const int sample = ReadBatteryVoltage();
+            if (sample <= 0) {
+                continue;
+            }
+            voltage_sum += sample;
+            min_voltage = std::min(min_voltage, sample);
+            max_voltage = std::max(max_voltage, sample);
+            ++valid_samples;
+        }
+
+        if (valid_samples >= 3) {
+            voltage_sum -= min_voltage + max_voltage;
+            valid_samples -= 2;
+        }
+
+        const int average_voltage = valid_samples > 0 ? voltage_sum / valid_samples : 0;
         if (average_voltage <= 0) {
             voltage_mv = 0;
             percent = 0;
             return false;
         }
 
-        int computed_percent =
-            (-1 * average_voltage * average_voltage + 9016 * average_voltage - 19189000) / 10000;
-        computed_percent = computed_percent > 100 ? 100 : (computed_percent < 0 ? 0 : computed_percent);
+        charge_status_.Tick(GetNowMs());
+        const ChargeStatus::Snapshot snapshot = charge_status_.Get();
+        int compensated_voltage = average_voltage;
+        if (snapshot.charging && !snapshot.full) {
+            // During charging the terminal voltage is higher than the rested
+            // battery voltage. Compensate so plugging in does not fake a huge
+            // state-of-charge jump.
+            compensated_voltage -= 120;
+        }
+        compensated_voltage = std::clamp(compensated_voltage, 0, 5000);
+
+        uint8_t computed_percent = PercentFromBatteryVoltage(static_cast<uint16_t>(compensated_voltage));
+        if (snapshot.full) {
+            computed_percent = 100;
+        }
+        computed_percent = SmoothBatteryPercent(battery_display_percent_,
+                                                computed_percent,
+                                                battery_display_initialized_,
+                                                snapshot.power_present,
+                                                snapshot.full);
+        battery_display_initialized_ = true;
+        battery_display_percent_ = computed_percent;
 
         voltage_mv = static_cast<uint16_t>(average_voltage);
-        percent = static_cast<uint8_t>(computed_percent);
+        percent = computed_percent;
         return true;
     }
 
@@ -418,6 +564,8 @@ private:
     std::unique_ptr<RtcPcf8563> rtc_;
     std::unique_ptr<ZectrixNfc> nfc_;
     ChargeStatus charge_status_;
+    bool battery_display_initialized_ = false;
+    uint8_t battery_display_percent_ = 0;
     Button up_button_;
     Button down_button_;
     Button confirm_button_;
@@ -456,6 +604,51 @@ extern "C" bool ZectrixReadBatteryPercentForFactoryTest(int* level) {
 extern "C" bool ZectrixReadBatteryPercent(int* level) {
     auto& board = static_cast<CustomBoard&>(Board::GetInstance());
     return board.ReadBatteryPercentForFactoryTest(level);
+}
+
+extern "C" bool ZectrixReadBatteryUiStatus(int* level, int* voltage_mv, bool* charging, bool* power_present) {
+    auto& board = static_cast<CustomBoard&>(Board::GetInstance());
+    return board.ReadBatteryUiStatus(level, voltage_mv, charging, power_present);
+}
+
+extern "C" int ZectrixReadWifiUiState() {
+    auto& wifi = WifiManager::GetInstance();
+    if (!wifi.IsInitialized()) {
+        return ZECTRIX_WIFI_UI_OFF;
+    }
+    if (wifi.IsConfigMode()) {
+        return ZECTRIX_WIFI_UI_CONFIG_AP;
+    }
+    if (wifi.IsConnected()) {
+        return ZECTRIX_WIFI_UI_CONNECTED;
+    }
+    return ZECTRIX_WIFI_UI_CONNECTING;
+}
+
+extern "C" bool ZectrixReadWifiUiStatus(char* out_status, size_t out_size) {
+    if (out_status == nullptr || out_size == 0) {
+        return false;
+    }
+
+    const char* status = "OFF";
+    switch (ZectrixReadWifiUiState()) {
+        case ZECTRIX_WIFI_UI_CONFIG_AP:
+            status = "AP";
+            break;
+        case ZECTRIX_WIFI_UI_CONNECTED:
+            status = "WiFi";
+            break;
+        case ZECTRIX_WIFI_UI_CONNECTING:
+            status = "...";
+            break;
+        case ZECTRIX_WIFI_UI_OFF:
+        default:
+            status = "OFF";
+            break;
+    }
+    std::strncpy(out_status, status, out_size - 1);
+    out_status[out_size - 1] = '\0';
+    return true;
 }
 
 extern "C" bool ZectrixReadLocalDate(tm* out_local_tm) {

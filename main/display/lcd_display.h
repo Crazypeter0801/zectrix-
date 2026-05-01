@@ -12,6 +12,8 @@
 class FactoryTestPageAdapter;
 class MealPickerPageAdapter;
 class FeatureMenuPageAdapter;
+class BitcoinPricePageAdapter;
+class ModuleSettingsPageAdapter;
 
 class LcdDisplay : public LvglDisplay {
 protected:
@@ -23,6 +25,8 @@ protected:
     FactoryTestPageAdapter* factory_test_page_adapter_ = nullptr;
     MealPickerPageAdapter* meal_picker_page_adapter_ = nullptr;
     FeatureMenuPageAdapter* feature_menu_page_adapter_ = nullptr;
+    BitcoinPricePageAdapter* bitcoin_price_page_adapter_ = nullptr;
+    ModuleSettingsPageAdapter* module_settings_page_adapter_ = nullptr;
     bool ui_setup_done_ = false;
 
     void ShowScreen(lv_obj_t* scr);
@@ -36,6 +40,8 @@ protected:
     friend class FactoryTestPageAdapter;
     friend class MealPickerPageAdapter;
     friend class FeatureMenuPageAdapter;
+    friend class BitcoinPricePageAdapter;
+    friend class ModuleSettingsPageAdapter;
 
     LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width, int height);
 
@@ -54,9 +60,11 @@ public:
     void ShowFactoryTestPage();
     void ShowMealPickerPage();
     void ShowFeatureMenuPage();
+    void ShowModuleSettingsPage(UiPageId owner_page_id);
     void RefreshMealPickerSystemInfo();
     bool IsFactoryTestPageActive();
     FactoryTestPageAdapter* GetFactoryTestPageAdapter() { return factory_test_page_adapter_; }
+    BitcoinPricePageAdapter* GetBitcoinPricePageAdapter() { return bitcoin_price_page_adapter_; }
 };
 
 #endif  // LCD_DISPLAY_H

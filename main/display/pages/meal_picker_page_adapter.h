@@ -33,8 +33,7 @@ private:
     lv_obj_t* restaurant_label_ = nullptr;
     lv_obj_t* hint_label_ = nullptr;
     lv_obj_t* count_label_ = nullptr;
-    lv_obj_t* date_label_ = nullptr;
-    lv_obj_t* battery_label_ = nullptr;
+    lv_obj_t* status_bar_ = nullptr;
 };
 
 #endif  // MEAL_PICKER_PAGE_ADAPTER_H

@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "wifi_manager.cc"
         "wifi_configuration_ap.cc"
+        "market_watchlist.cc"
         "wifi_station.cc"
         "ssid_manager.cc"
         "dns_server.cc"

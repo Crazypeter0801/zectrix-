@@ -14,6 +14,44 @@ config COINGECKO_DEMO_API_KEY
         Optional API key for CoinGecko's demo API. Leave empty to use the
         public endpoint without an API key when available.
 
+config MARKET_PRICE_API_PROVIDER
+    string "Market quote API provider"
+    default "tencent_cn_stock"
+    help
+        Provider used by the build-time default market preset.
+        Supported values: tencent_cn_stock, coingecko, finnhub, twelvedata.
+
+config MARKET_PRICE_SYMBOL
+    string "Market quote symbol"
+    default "sh601985"
+    help
+        Build-time default symbol. Tencent China stock uses sh601985 or
+        sz000001. CoinGecko uses asset ids such as bitcoin or ethereum.
+        Finnhub uses tickers such as AAPL. Twelve Data accepts symbols such
+        as AAPL or BTC/USD.
+
+config MARKET_PRICE_DISPLAY_NAME
+    string "Market quote display name"
+    default "中国核电"
+    help
+        Human-friendly name shown on the e-paper market quote page.
+
+config MARKET_PRICE_API_KEY
+    string "Market quote API key"
+    default ""
+    help
+        Optional provider API key. Finnhub and Twelve Data need a key for
+        stock quotes. CoinGecko can also use this key; if empty, the older
+        COINGECKO_DEMO_API_KEY value is used as a fallback.
+
+config MARKET_PRICE_REFRESH_SECONDS
+    int "Market quote refresh interval seconds"
+    default 1800
+    range 60 86400
+    help
+        How often the market quote service refreshes after a successful
+        request. 1800 seconds is 30 minutes.
+
 config OTA_URL
     string "Default OTA URL"
     default "https://ota.zectrix.com/xiaozhi/ota/"

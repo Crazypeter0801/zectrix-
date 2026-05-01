@@ -1,6 +1,7 @@
 #include "lcd_display.h"
 
 #include "lvgl_theme.h"
+#include "pages/bitcoin_price_page_adapter.h"
 #include "pages/feature_pages_adapter.h"
 #include "pages/factory_test_page_adapter.h"
 #include "pages/meal_picker_page_adapter.h"
@@ -83,6 +84,8 @@ LcdDisplay::~LcdDisplay() {
         factory_test_page_adapter_ = nullptr;
         meal_picker_page_adapter_ = nullptr;
         feature_menu_page_adapter_ = nullptr;
+        bitcoin_price_page_adapter_ = nullptr;
+        module_settings_page_adapter_ = nullptr;
         ui_setup_done_ = false;
         if (factory_test_screen_ != nullptr) {
             lv_obj_del(factory_test_screen_);
@@ -159,6 +162,14 @@ void LcdDisplay::ShowFeatureMenuPage() {
     RequestUrgentRefresh();
 }
 
+void LcdDisplay::ShowModuleSettingsPage(UiPageId owner_page_id) {
+    if (module_settings_page_adapter_ != nullptr) {
+        module_settings_page_adapter_->SetOwnerPage(owner_page_id);
+    }
+    (void)SwitchPage(UiPageId::ModuleSettings);
+    RequestUrgentRefresh();
+}
+
 void LcdDisplay::RefreshMealPickerSystemInfo() {
     DisplayLockGuard lock(this);
     if (meal_picker_page_adapter_ == nullptr) {
@@ -200,6 +211,13 @@ void LcdDisplay::SetupUI() {
         return;
     }
 
+    auto bitcoin_price_page = std::make_unique<BitcoinPricePageAdapter>(this);
+    bitcoin_price_page_adapter_ = bitcoin_price_page.get();
+    if (!RegisterPageLocked(std::move(bitcoin_price_page))) {
+        bitcoin_price_page_adapter_ = nullptr;
+        return;
+    }
+
     if (!RegisterPageLocked(std::make_unique<AnswerBookPageAdapter>(this))) {
         return;
     }
@@ -210,6 +228,12 @@ void LcdDisplay::SetupUI() {
         return;
     }
     if (!RegisterPageLocked(std::make_unique<SettingsPageAdapter>(this))) {
+        return;
+    }
+    auto module_settings_page = std::make_unique<ModuleSettingsPageAdapter>(this);
+    module_settings_page_adapter_ = module_settings_page.get();
+    if (!RegisterPageLocked(std::move(module_settings_page))) {
+        module_settings_page_adapter_ = nullptr;
         return;
     }
 

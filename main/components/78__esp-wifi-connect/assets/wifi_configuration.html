@@ -41,6 +41,29 @@
             background-color: #ccc;
             cursor: not-allowed;
         }
+        button {
+            border: 0;
+            border-radius: 10px;
+            padding: 10px 12px;
+            background: #111827;
+            color: #fff;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        button.secondary {
+            border: 1px solid #d1d5db;
+            background: #fff;
+            color: #111827;
+        }
+        button.danger {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        button:disabled {
+            background: #d1d5db;
+            color: #6b7280;
+            cursor: not-allowed;
+        }
         #remember_bssid, #sleep_mode {
             width: auto;
         }
@@ -167,6 +190,94 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        .market-card {
+            max-width: 520px;
+            margin: 0 auto;
+            border: 1px solid #e5e7eb;
+            border-radius: 18px;
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+            padding: 18px;
+        }
+        .market-subtitle {
+            color: #64748b;
+            line-height: 1.6;
+            margin-top: -4px;
+        }
+        .market-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin: 16px 0;
+        }
+        .market-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+            align-items: center;
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            background: #fff;
+            padding: 12px;
+        }
+        .market-symbol {
+            color: #64748b;
+            font-size: 13px;
+            margin-top: 2px;
+        }
+        .market-actions {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .market-actions button {
+            min-width: 38px;
+            padding: 8px 9px;
+        }
+        .market-form {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 14px;
+        }
+        .market-form button {
+            grid-column: 1 / -1;
+        }
+        .market-footer {
+            display: flex;
+            gap: 10px;
+            margin-top: 12px;
+        }
+        .market-footer button {
+            flex: 1;
+        }
+        .market-error {
+            color: #b91c1c;
+            min-height: 20px;
+            text-align: center;
+        }
+        .market-success {
+            color: #047857;
+            min-height: 20px;
+            text-align: center;
+        }
+        @media (max-width: 480px) {
+            .tabs {
+                padding-left: 8px;
+            }
+            .tab {
+                padding: 10px 12px;
+                font-size: 14px;
+            }
+            .market-form {
+                grid-template-columns: 1fr;
+            }
+            .market-footer {
+                flex-direction: column;
+            }
+        }
     </style>
 </head>
 <body>
@@ -228,6 +339,7 @@
     <!-- Tabs -->
     <div class="tabs">
         <div class="tab active" onclick="switchTab('wifi')" data-lang="wifi_tab">Wi-Fi Config</div>
+        <div class="tab" onclick="switchTab('market')">我的自选股</div>
         <div class="tab" onclick="switchTab('advanced')" data-lang="advanced_tab">Advanced</div>
     </div>
 
@@ -262,6 +374,26 @@
         </div>
     </div>
 
+    <!-- Market Watchlist Tab -->
+    <div id="market-tab" class="tab-content">
+        <div class="market-card">
+            <h3>我的自选股</h3>
+            <p class="market-subtitle">保存在设备本地，不需要腾讯账号。行情页可用上/下键切换，确认键刷新。</p>
+            <div id="market_list" class="market-list"></div>
+            <div class="market-form">
+                <input type="text" id="market_symbol" placeholder="sh601985" maxlength="8">
+                <input type="text" id="market_name" placeholder="中国核电" maxlength="48">
+                <button type="button" onclick="addMarketItem()" id="market_add_button">添加到自选股</button>
+            </div>
+            <p class="market-error" id="market_error"></p>
+            <p class="market-success" id="market_success"></p>
+            <div class="market-footer">
+                <button type="button" onclick="saveMarketWatchlist()" id="market_save_button">保存自选股</button>
+                <button type="button" class="secondary" onclick="loadMarketWatchlist()">重新加载</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Advanced Configuration Tab -->
     <div id="advanced-tab" class="tab-content">
         <form action="/advanced/submit" method="post" onsubmit="submitAdvancedForm(event)">
@@ -274,7 +406,7 @@
                     <label for="ota_url" data-lang="ota_url">Custom OTA URL:</label>
                     <div style="display: flex; align-items: center; gap: 10px;">
                         <input type="text" id="ota_url" name="ota_url" style="flex: 1;">
-                        <button type="button" onclick="clearOtaUrl()" style="padding: 5px 10px; border: 1px solid #ccc; border-radius: 3px; background-color: #f0f0f0; cursor: pointer;">❌</button>
+                        <button type="button" onclick="clearOtaUrl()" style="padding: 5px 10px; border: 1px solid #ccc; border-radius: 3px; background-color: #f0f0f0; color: #111827; cursor: pointer;">❌</button>
                     </div>
                 </p>
 
@@ -325,6 +457,8 @@
         const error = document.getElementById('error');
         const ssid = document.getElementById('ssid');
         let support5G = false; // Store 5G support status
+        let marketItems = [];
+        let editingMarketIndex = -1;
 
         // ========== Translation Data ==========
         const translations = {
@@ -1360,6 +1494,173 @@
             }
         }
 
+        // ========== Market Watchlist ==========
+
+        function escapeHtml(text) {
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function setMarketMessage(errorText, successText) {
+            document.getElementById('market_error').textContent = errorText || '';
+            document.getElementById('market_success').textContent = successText || '';
+        }
+
+        function normalizeMarketSymbol(value) {
+            return String(value || '').trim().replace(/\s+/g, '').toLowerCase();
+        }
+
+        function isValidMarketSymbol(symbol) {
+            return /^(sh|sz|bj)\d{6}$/.test(symbol);
+        }
+
+        function renderMarketList() {
+            const list = document.getElementById('market_list');
+            if (!marketItems.length) {
+                list.innerHTML = '<div class="market-row"><div>还没有自选股<div class="market-symbol">请至少添加一只股票</div></div></div>';
+                return;
+            }
+
+            list.innerHTML = marketItems.map((item, index) => {
+                return '<div class="market-row">' +
+                    '<div><strong>' + escapeHtml(item.name || item.symbol) + '</strong>' +
+                    '<div class="market-symbol">' + escapeHtml(item.symbol) + '</div></div>' +
+                    '<div class="market-actions">' +
+                    '<button type="button" class="secondary" onclick="editMarketItem(' + index + ')">改</button>' +
+                    '<button type="button" class="secondary" onclick="moveMarketItem(' + index + ', -1)">上</button>' +
+                    '<button type="button" class="secondary" onclick="moveMarketItem(' + index + ', 1)">下</button>' +
+                    '<button type="button" class="danger" onclick="removeMarketItem(' + index + ')">删</button>' +
+                    '</div></div>';
+            }).join('');
+        }
+
+        function addMarketItem() {
+            const symbolInput = document.getElementById('market_symbol');
+            const nameInput = document.getElementById('market_name');
+            const symbol = normalizeMarketSymbol(symbolInput.value);
+            const name = nameInput.value.trim() || symbol;
+
+            if (!isValidMarketSymbol(symbol)) {
+                setMarketMessage('股票代码格式应为 sh/sz/bj + 6位数字，例如 sh601985。');
+                return;
+            }
+            if (marketItems.some((item, index) => item.symbol === symbol && index !== editingMarketIndex)) {
+                setMarketMessage('这只股票已经在自选股里了。');
+                return;
+            }
+            if (editingMarketIndex < 0 && marketItems.length >= 20) {
+                setMarketMessage('最多保存 20 只自选股。');
+                return;
+            }
+
+            if (editingMarketIndex >= 0 && editingMarketIndex < marketItems.length) {
+                marketItems[editingMarketIndex] = {symbol, name};
+                setMarketMessage('', '已修改，记得点击保存。');
+            } else {
+                marketItems.push({symbol, name});
+                setMarketMessage('', '已添加，记得点击保存。');
+            }
+            resetMarketEditor();
+            renderMarketList();
+        }
+
+        function editMarketItem(index) {
+            if (index < 0 || index >= marketItems.length) {
+                return;
+            }
+            editingMarketIndex = index;
+            document.getElementById('market_symbol').value = marketItems[index].symbol;
+            document.getElementById('market_name').value = marketItems[index].name || '';
+            document.getElementById('market_add_button').textContent = '保存这条修改';
+            setMarketMessage('', '正在编辑：' + (marketItems[index].name || marketItems[index].symbol));
+        }
+
+        function resetMarketEditor() {
+            editingMarketIndex = -1;
+            document.getElementById('market_symbol').value = '';
+            document.getElementById('market_name').value = '';
+            document.getElementById('market_add_button').textContent = '添加到自选股';
+        }
+
+        function removeMarketItem(index) {
+            if (marketItems.length <= 1) {
+                setMarketMessage('至少保留一只股票。');
+                return;
+            }
+            marketItems.splice(index, 1);
+            resetMarketEditor();
+            setMarketMessage('', '已删除，记得点击保存。');
+            renderMarketList();
+        }
+
+        function moveMarketItem(index, delta) {
+            const next = index + delta;
+            if (next < 0 || next >= marketItems.length) {
+                return;
+            }
+            const item = marketItems[index];
+            marketItems.splice(index, 1);
+            marketItems.splice(next, 0, item);
+            resetMarketEditor();
+            setMarketMessage('', '顺序已调整，记得点击保存。');
+            renderMarketList();
+        }
+
+        async function loadMarketWatchlist() {
+            try {
+                const response = await fetch('/market/watchlist');
+                const data = await response.json();
+                if (!data.success) {
+                    throw new Error(data.error || '加载失败');
+                }
+                marketItems = (data.items || []).map(item => ({
+                    symbol: normalizeMarketSymbol(item.symbol),
+                    name: item.name || item.symbol
+                }));
+                resetMarketEditor();
+                setMarketMessage('', '已加载设备自选股。');
+                renderMarketList();
+            } catch (err) {
+                setMarketMessage(err.message || '加载失败');
+                renderMarketList();
+            }
+        }
+
+        async function saveMarketWatchlist() {
+            const saveButton = document.getElementById('market_save_button');
+            if (!marketItems.length) {
+                setMarketMessage('至少添加一只股票。');
+                return;
+            }
+
+            saveButton.disabled = true;
+            try {
+                const response = await fetch('/market/watchlist', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({items: marketItems})
+                });
+                const data = await response.json();
+                if (!data.success) {
+                    throw new Error(data.error || '保存失败');
+                }
+                marketItems = data.items || marketItems;
+                setMarketMessage('', '保存成功，墨水屏行情页会使用这份列表。');
+                showToast('自选股已保存');
+                renderMarketList();
+            } catch (err) {
+                setMarketMessage(err.message || '保存失败');
+            } finally {
+                saveButton.disabled = false;
+            }
+        }
+
         // ========== UI Functions ==========
         
         /**
@@ -1450,6 +1751,7 @@
             loadSavedList();
             loadAPList();
             loadAdvancedConfig();
+            loadMarketWatchlist();
         });
 
         /**

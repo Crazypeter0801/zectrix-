@@ -2,6 +2,7 @@
 
 #include "lcd_display.h"
 #include "lvgl_theme.h"
+#include "pages/status_bar.h"
 
 #include <esp_random.h>
 
@@ -29,9 +30,6 @@ constexpr const char* kRestaurants[] = {
 };
 
 constexpr size_t kRestaurantCount = sizeof(kRestaurants) / sizeof(kRestaurants[0]);
-
-extern "C" bool ZectrixReadBatteryPercent(int* level);
-extern "C" bool ZectrixReadLocalDate(tm* out_local_tm);
 
 void StyleScreen(lv_obj_t* obj) {
     lv_obj_set_size(obj, kPageWidth, kPageHeight);
@@ -127,15 +125,8 @@ void MealPickerPageAdapter::Build() {
     MakeLine(screen_, 354, 58, 18, 18);
     MakeLine(screen_, 358, 62, 10, 10);
 
-    date_label_ = lv_label_create(screen_);
-    StyleLabel(date_label_, text_font);
-    lv_label_set_text(date_label_, "时间 --:--");
-    lv_obj_align(date_label_, LV_ALIGN_TOP_RIGHT, -18, 14);
-
-    battery_label_ = lv_label_create(screen_);
-    StyleLabel(battery_label_, text_font);
-    lv_label_set_text(battery_label_, "电量 --%");
-    lv_obj_align(battery_label_, LV_ALIGN_TOP_RIGHT, -18, 42);
+    status_bar_ = zectrix_status_bar::Create(screen_, text_font);
+    lv_obj_align(status_bar_, LV_ALIGN_TOP_RIGHT, -18, 14);
 
     lv_obj_t* card_shadow = lv_obj_create(screen_);
     StyleBox(card_shadow, lv_color_black(), lv_color_black(), 0);
@@ -179,7 +170,7 @@ void MealPickerPageAdapter::Build() {
     lv_obj_set_width(hint_label_, 304);
     lv_obj_set_style_text_align(hint_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(hint_label_, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(hint_label_, "确认键抽一家 · 不连网 · 不纠结");
+    lv_label_set_text(hint_label_, "确认抽取 · 长按下设置");
     lv_obj_align(hint_label_, LV_ALIGN_TOP_LEFT, 60, 238);
 
     lv_obj_t* footer_bar = lv_obj_create(screen_);
@@ -205,12 +196,17 @@ void MealPickerPageAdapter::OnShow() {
 }
 
 bool MealPickerPageAdapter::HandleEvent(const UiPageEvent& event) {
-    if (event.type != UiPageEventType::ConfirmPressed) {
-        return false;
+    if (event.type == UiPageEventType::DownLongPressed) {
+        if (host_ != nullptr) {
+            host_->ShowModuleSettingsPage(Id());
+        }
+        return true;
     }
-
-    PickNextRestaurant();
-    return true;
+    if (event.type == UiPageEventType::ConfirmPressed) {
+        PickNextRestaurant();
+        return true;
+    }
+    return false;
 }
 
 void MealPickerPageAdapter::PickNextRestaurant() {
@@ -248,31 +244,7 @@ void MealPickerPageAdapter::RefreshSystemInfoLocked() {
     if (!built_ || screen_ == nullptr) {
         return;
     }
-
-    int battery_percent = 0;
-    if (ZectrixReadBatteryPercent(&battery_percent)) {
-        char battery_buf[32];
-        snprintf(battery_buf, sizeof(battery_buf), "电量 %d%%", battery_percent);
-        lv_label_set_text(battery_label_, battery_buf);
-    } else {
-        lv_label_set_text(battery_label_, "电量 --%");
-    }
-
-    tm local_tm = {};
-    if (ZectrixReadLocalDate(&local_tm) &&
-        local_tm.tm_mon >= 0 && local_tm.tm_mon < 12 &&
-        local_tm.tm_mday >= 1 && local_tm.tm_mday <= 31 &&
-        local_tm.tm_wday >= 0 && local_tm.tm_wday < 7) {
-        char time_buf[32];
-        snprintf(time_buf,
-                 sizeof(time_buf),
-                 "时间 %02d:%02d",
-                 local_tm.tm_hour,
-                 local_tm.tm_min);
-        lv_label_set_text(date_label_, time_buf);
-    } else {
-        lv_label_set_text(date_label_, "时间 --:--");
-    }
+    zectrix_status_bar::Refresh(status_bar_);
 }
 
 void MealPickerPageAdapter::ApplySelectionLocked() {
@@ -282,10 +254,10 @@ void MealPickerPageAdapter::ApplySelectionLocked() {
 
     if (current_index_ >= 0 && current_index_ < static_cast<int>(kRestaurantCount)) {
         lv_label_set_text(restaurant_label_, kRestaurants[current_index_]);
-        lv_label_set_text(hint_label_, "已经选好啦 · 再按确认键换一家");
+        lv_label_set_text(hint_label_, "再按确认换一家");
     } else {
         lv_label_set_text(restaurant_label_, "按确认键开始");
-        lv_label_set_text(hint_label_, "确认键抽一家 · 不连网 · 不纠结");
+        lv_label_set_text(hint_label_, "确认抽取 · 长按下设置");
     }
 
     char count_buf[32];

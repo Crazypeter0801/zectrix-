@@ -432,7 +432,13 @@ void CustomLcdDisplay::refresh_task_loop() {
     };
 
     while (true) {
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
+        TickType_t wait_ticks = portMAX_DELAY;
+        xSemaphoreTake(dirty_mutex, portMAX_DELAY);
+        if (pending || urgent_refresh || force_full_refresh_ || refresh_in_progress) {
+            wait_ticks = pdMS_TO_TICKS(50);
+        }
+        xSemaphoreGive(dirty_mutex);
+        ulTaskNotifyTake(pdTRUE, wait_ticks);
 
         TickType_t now = xTaskGetTickCount();
 

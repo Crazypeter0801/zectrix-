@@ -22,6 +22,10 @@ const char* UiPageIdName(UiPageId id) {
             return "CalendarTime";
         case UiPageId::Settings:
             return "Settings";
+        case UiPageId::BitcoinPrice:
+            return "BitcoinPrice";
+        case UiPageId::ModuleSettings:
+            return "ModuleSettings";
         default:
             return "Unknown";
     }

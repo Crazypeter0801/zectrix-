@@ -1,12 +1,18 @@
 #include "pages/feature_pages_adapter.h"
 
+#include "application.h"
 #include "lcd_display.h"
 #include "lvgl_theme.h"
+#include "market_watchlist.h"
+#include "pages/status_bar.h"
 #include "settings.h"
+#include "wifi_manager.h"
 
 #include <esp_random.h>
 
 #include <cstdio>
+#include <cstring>
+#include <string>
 
 namespace {
 
@@ -16,6 +22,8 @@ constexpr const char* kUiSettingsNamespace = "ui";
 constexpr const char* kHomePageKey = "home_page";
 constexpr const char* kAnswerLanguageKey = "answer_lang";
 constexpr const char* kAnswerAutoDrawKey = "answer_auto_draw";
+constexpr const char* kDisplaySettingsNamespace = "display";
+constexpr const char* kDisplayThemeKey = "theme";
 
 constexpr const char* kWeekdays[] = {
     "周日",
@@ -28,7 +36,6 @@ constexpr const char* kWeekdays[] = {
 };
 
 extern "C" bool ZectrixReadLocalDate(tm* out_local_tm);
-extern "C" bool ZectrixReadBatteryPercent(int* level);
 
 struct MenuItem {
     const char* title;
@@ -38,9 +45,10 @@ struct MenuItem {
 
 constexpr MenuItem kMenuItems[] = {
     {"今天吃什么", "随机饭店抽签", UiPageId::MealPicker},
+    {"行情", "BTC 与股票价格", UiPageId::BitcoinPrice},
     {"答案之书", "双语随机答案", UiPageId::AnswerBook},
     {"老黄历", "日期时间与宜忌", UiPageId::Almanac},
-    {"设置", "首页与答案显示", UiPageId::Settings},
+    {"设置", "系统与网络", UiPageId::Settings},
 };
 
 struct AnswerEntry {
@@ -110,10 +118,10 @@ struct SettingItem {
     const char* detail;
 };
 
-constexpr SettingItem kSettings[] = {
+constexpr SettingItem kSystemSettings[] = {
     {"首页", "确认键切换开机默认页面"},
-    {"答案显示", "确认键切换答案之书语言"},
-    {"答案自动翻页", "进入答案之书时自动随机一页"},
+    {"显示主题", "确认键切换浅色/反色主题"},
+    {"WiFi 配网", "确认键启动设备热点配置网络"},
 };
 
 constexpr const char* kHomePageNames[] = {
@@ -121,12 +129,23 @@ constexpr const char* kHomePageNames[] = {
     "答案之书",
     "老黄历",
     "功能菜单",
+    "行情",
 };
 
 constexpr const char* kAnswerLanguageNames[] = {
     "中英",
     "中文",
     "English",
+};
+
+constexpr const char* kThemeSettingNames[] = {
+    "浅色",
+    "反色",
+};
+
+constexpr const char* kThemeSettingValues[] = {
+    "light",
+    "dark",
 };
 
 void StyleScreen(lv_obj_t* obj) {
@@ -167,38 +186,97 @@ bool IsValidDate(const tm& value) {
 }
 
 void RefreshStatusLabel(lv_obj_t* label) {
-    if (label == nullptr) {
-        return;
-    }
-
-    tm local_tm = {};
-    const bool has_time = ZectrixReadLocalDate(&local_tm) && IsValidDate(local_tm);
-
-    int battery_percent = 0;
-    const bool has_battery = ZectrixReadBatteryPercent(&battery_percent);
-
-    char buf[32];
-    if (has_time && has_battery) {
-        snprintf(buf, sizeof(buf), "%02d:%02d  %d%%", local_tm.tm_hour, local_tm.tm_min, battery_percent);
-    } else if (has_time) {
-        snprintf(buf, sizeof(buf), "%02d:%02d  --%%", local_tm.tm_hour, local_tm.tm_min);
-    } else if (has_battery) {
-        snprintf(buf, sizeof(buf), "--:--  %d%%", battery_percent);
-    } else {
-        snprintf(buf, sizeof(buf), "--:--  --%%");
-    }
-    lv_label_set_text(label, buf);
+    zectrix_status_bar::Refresh(label);
 }
 
 lv_obj_t* CreateStatusLabel(lv_obj_t* screen, const lv_font_t* text_font) {
-    lv_obj_t* label = lv_label_create(screen);
-    StyleLabel(label, text_font);
-    lv_obj_set_width(label, 116);
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
-    lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -18, 16);
-    RefreshStatusLabel(label);
-    return label;
+    lv_obj_t* status_bar = zectrix_status_bar::Create(screen, text_font);
+    lv_obj_align(status_bar, LV_ALIGN_TOP_RIGHT, -18, 16);
+    return status_bar;
+}
+
+void SetObjHidden(lv_obj_t* obj, bool hidden) {
+    if (obj == nullptr) {
+        return;
+    }
+    if (hidden) {
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_remove_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void CreateSettingPopup(lv_obj_t* screen,
+                        const lv_font_t* title_font,
+                        const lv_font_t* text_font,
+                        lv_obj_t** popup,
+                        lv_obj_t** title_label,
+                        lv_obj_t** value_label,
+                        lv_obj_t** detail_label,
+                        lv_obj_t** hint_label) {
+    if (screen == nullptr || popup == nullptr) {
+        return;
+    }
+
+    *popup = lv_obj_create(screen);
+    StyleBox(*popup, lv_color_white(), lv_color_black(), 3);
+    lv_obj_set_size(*popup, 304, 150);
+    lv_obj_align(*popup, LV_ALIGN_CENTER, 18, 4);
+
+    lv_obj_t* header = lv_obj_create(*popup);
+    StyleBox(header, lv_color_black(), lv_color_black(), 0);
+    lv_obj_set_size(header, 304, 30);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+
+    *title_label = lv_label_create(header);
+    StyleLabel(*title_label, text_font, lv_color_white());
+    lv_obj_set_width(*title_label, 280);
+    lv_obj_set_style_text_align(*title_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(*title_label, LV_LABEL_LONG_DOT);
+    lv_label_set_text(*title_label, "设置");
+    lv_obj_center(*title_label);
+
+    *value_label = lv_label_create(*popup);
+    StyleLabel(*value_label, title_font);
+    lv_obj_set_width(*value_label, 280);
+    lv_obj_set_style_text_align(*value_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(*value_label, LV_LABEL_LONG_DOT);
+    lv_label_set_text(*value_label, "--");
+    lv_obj_align(*value_label, LV_ALIGN_TOP_MID, 0, 50);
+
+    *detail_label = lv_label_create(*popup);
+    StyleLabel(*detail_label, text_font);
+    lv_obj_set_width(*detail_label, 270);
+    lv_obj_set_style_text_align(*detail_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(*detail_label, LV_LABEL_LONG_DOT);
+    lv_label_set_text(*detail_label, "");
+    lv_obj_align(*detail_label, LV_ALIGN_TOP_MID, 0, 92);
+
+    *hint_label = lv_label_create(*popup);
+    StyleLabel(*hint_label, text_font);
+    lv_obj_set_width(*hint_label, 270);
+    lv_obj_set_style_text_align(*hint_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(*hint_label, LV_LABEL_LONG_DOT);
+    lv_label_set_text(*hint_label, "上/下调整 · 确认保存");
+    lv_obj_align(*hint_label, LV_ALIGN_BOTTOM_MID, 0, -10);
+
+    SetObjHidden(*popup, true);
+}
+
+bool StartConfigPortal(const char* ssid_prefix) {
+    auto& wifi = WifiManager::GetInstance();
+    if (!wifi.IsInitialized()) {
+        WifiManagerConfig config;
+        config.ssid_prefix = ssid_prefix != nullptr ? ssid_prefix : "ZecTrix-Setup";
+        config.language = "zh-CN";
+        config.station_scan_min_interval_seconds = 5;
+        config.station_scan_max_interval_seconds = 300;
+        if (!wifi.Initialize(config)) {
+            return false;
+        }
+    }
+    wifi.StartConfigAp();
+    return true;
 }
 
 void AddHeader(lv_obj_t* screen, const lv_font_t* title_font, const lv_font_t* text_font,
@@ -245,6 +323,32 @@ const lv_font_t* TextFont(LcdDisplay* host) {
     return lvgl_theme->text_font()->font();
 }
 
+int ThemeIndexFromName(const std::string& theme_name) {
+    for (size_t i = 0; i < sizeof(kThemeSettingValues) / sizeof(kThemeSettingValues[0]); ++i) {
+        if (theme_name == kThemeSettingValues[i]) {
+            return static_cast<int>(i);
+        }
+    }
+    return 0;
+}
+
+const char* PageTitle(UiPageId page_id) {
+    switch (page_id) {
+        case UiPageId::MealPicker:
+            return "今天吃什么";
+        case UiPageId::BitcoinPrice:
+            return "行情";
+        case UiPageId::AnswerBook:
+            return "答案之书";
+        case UiPageId::Almanac:
+            return "老黄历";
+        case UiPageId::CalendarTime:
+            return "日历与时间";
+        default:
+            return "当前模块";
+    }
+}
+
 }  // namespace
 
 FeatureMenuPageAdapter::FeatureMenuPageAdapter(LcdDisplay* host) : host_(host) {}
@@ -283,7 +387,7 @@ void FeatureMenuPageAdapter::Build() {
     StyleLabel(hint_label_, text_font);
     lv_obj_set_width(hint_label_, 318);
     lv_obj_set_style_text_align(hint_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(hint_label_, "长按上键：随时回到这里");
+    lv_label_set_text(hint_label_, "长按上：菜单");
     lv_obj_align(hint_label_, LV_ALIGN_BOTTOM_LEFT, 58, -18);
 
     built_ = true;
@@ -388,7 +492,7 @@ void AnswerBookPageAdapter::Build() {
     StyleLabel(hint_label_, text_font);
     lv_obj_set_width(hint_label_, 310);
     lv_obj_set_style_text_align(hint_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(hint_label_, "确认键再翻一页 · 长按上键回菜单");
+    lv_label_set_text(hint_label_, "确认翻页 · 长按下设置");
     lv_obj_align(hint_label_, LV_ALIGN_BOTTOM_LEFT, 58, -20);
 
     built_ = true;
@@ -408,11 +512,17 @@ void AnswerBookPageAdapter::OnShow() {
 }
 
 bool AnswerBookPageAdapter::HandleEvent(const UiPageEvent& event) {
-    if (event.type != UiPageEventType::ConfirmPressed) {
-        return false;
+    if (event.type == UiPageEventType::DownLongPressed) {
+        if (host_ != nullptr) {
+            host_->ShowModuleSettingsPage(Id());
+        }
+        return true;
     }
-    DrawAnswer();
-    return true;
+    if (event.type == UiPageEventType::ConfirmPressed) {
+        DrawAnswer();
+        return true;
+    }
+    return false;
 }
 
 void AnswerBookPageAdapter::DrawAnswer() {
@@ -546,7 +656,7 @@ void AlmanacPageAdapter::Build() {
     StyleLabel(hint_label_, text_font);
     lv_obj_set_width(hint_label_, 310);
     lv_obj_set_style_text_align(hint_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(hint_label_, "确认键换一签 · 长按上键回菜单");
+    lv_label_set_text(hint_label_, "确认换签 · 长按下设置");
     lv_obj_align(hint_label_, LV_ALIGN_BOTTOM_LEFT, 58, -20);
 
     built_ = true;
@@ -560,15 +670,21 @@ void AlmanacPageAdapter::OnShow() {
 }
 
 bool AlmanacPageAdapter::HandleEvent(const UiPageEvent& event) {
-    if (event.type != UiPageEventType::ConfirmPressed) {
-        return false;
+    if (event.type == UiPageEventType::DownLongPressed) {
+        if (host_ != nullptr) {
+            host_->ShowModuleSettingsPage(Id());
+        }
+        return true;
     }
-    ++refresh_count_;
-    RefreshFortune();
-    if (host_ != nullptr) {
-        host_->RequestUrgentRefresh();
+    if (event.type == UiPageEventType::ConfirmPressed) {
+        ++refresh_count_;
+        RefreshFortune();
+        if (host_ != nullptr) {
+            host_->RequestUrgentRefresh();
+        }
+        return true;
     }
-    return true;
+    return false;
 }
 
 void AlmanacPageAdapter::RefreshFortune() {
@@ -615,7 +731,7 @@ void AlmanacPageAdapter::ApplyLocked() {
     lv_label_set_text(avoid_label_, fortune.avoid);
 
     char hint_buf[96];
-    snprintf(hint_buf, sizeof(hint_buf), "%s · 确认换签 · 长按上键回菜单", fortune.note);
+    snprintf(hint_buf, sizeof(hint_buf), "%s · 长按下设置", fortune.note);
     lv_label_set_text(hint_label_, hint_buf);
 }
 
@@ -663,7 +779,7 @@ void CalendarTimePageAdapter::Build() {
     StyleLabel(hint_label_, text_font);
     lv_obj_set_width(hint_label_, 310);
     lv_obj_set_style_text_align(hint_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(hint_label_, "确认键刷新 · 长按上键回菜单");
+    lv_label_set_text(hint_label_, "确认刷新 · 长按下设置");
     lv_obj_align(hint_label_, LV_ALIGN_BOTTOM_LEFT, 58, -20);
 
     built_ = true;
@@ -677,14 +793,20 @@ void CalendarTimePageAdapter::OnShow() {
 }
 
 bool CalendarTimePageAdapter::HandleEvent(const UiPageEvent& event) {
-    if (event.type != UiPageEventType::ConfirmPressed) {
-        return false;
+    if (event.type == UiPageEventType::DownLongPressed) {
+        if (host_ != nullptr) {
+            host_->ShowModuleSettingsPage(Id());
+        }
+        return true;
     }
-    RefreshTime();
-    if (host_ != nullptr) {
-        host_->RequestUrgentRefresh();
+    if (event.type == UiPageEventType::ConfirmPressed) {
+        RefreshTime();
+        if (host_ != nullptr) {
+            host_->RequestUrgentRefresh();
+        }
+        return true;
     }
-    return true;
+    return false;
 }
 
 void CalendarTimePageAdapter::RefreshTime() {
@@ -734,7 +856,7 @@ void SettingsPageAdapter::Build() {
     AddHeader(screen_, body_font, text_font, "设置", "SET");
     status_label_ = CreateStatusLabel(screen_, text_font);
 
-    for (size_t i = 0; i < sizeof(kSettings) / sizeof(kSettings[0]); ++i) {
+    for (size_t i = 0; i < sizeof(kSystemSettings) / sizeof(kSystemSettings[0]); ++i) {
         item_labels_[i] = lv_label_create(screen_);
         StyleLabel(item_labels_[i], text_font);
         lv_obj_set_width(item_labels_[i], 310);
@@ -745,7 +867,8 @@ void SettingsPageAdapter::Build() {
     detail_label_ = lv_label_create(screen_);
     StyleLabel(detail_label_, text_font);
     lv_obj_set_width(detail_label_, 310);
-    lv_label_set_long_mode(detail_label_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_height(detail_label_, 24);
+    lv_label_set_long_mode(detail_label_, LV_LABEL_LONG_DOT);
     lv_label_set_text(detail_label_, "");
     lv_obj_align(detail_label_, LV_ALIGN_BOTTOM_LEFT, 58, -38);
 
@@ -753,8 +876,17 @@ void SettingsPageAdapter::Build() {
     StyleLabel(hint, text_font);
     lv_obj_set_width(hint, 310);
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(hint, "上/下选择 · 确认切换 · 长按上键回菜单");
+    lv_label_set_text(hint, "系统设置 · 确认操作");
     lv_obj_align(hint, LV_ALIGN_BOTTOM_LEFT, 58, -14);
+
+    CreateSettingPopup(screen_,
+                       body_font,
+                       text_font,
+                       &popup_,
+                       &popup_title_label_,
+                       &popup_value_label_,
+                       &popup_detail_label_,
+                       &popup_hint_label_);
 
     LoadSettings();
     built_ = true;
@@ -764,11 +896,33 @@ void SettingsPageAdapter::Build() {
 lv_obj_t* SettingsPageAdapter::Screen() const { return screen_; }
 
 void SettingsPageAdapter::OnShow() {
+    popup_active_ = false;
+    SetObjHidden(popup_, true);
     LoadSettings();
     ApplySelectionLocked();
 }
 
 bool SettingsPageAdapter::HandleEvent(const UiPageEvent& event) {
+    if (popup_active_) {
+        if (event.type == UiPageEventType::UpPressed) {
+            MovePopup(-1);
+            return true;
+        }
+        if (event.type == UiPageEventType::DownPressed) {
+            MovePopup(1);
+            return true;
+        }
+        if (event.type == UiPageEventType::ConfirmPressed) {
+            ClosePopup(true);
+            return true;
+        }
+        if (event.type == UiPageEventType::DownLongPressed) {
+            ClosePopup(false);
+            return true;
+        }
+        return true;
+    }
+
     if (event.type == UiPageEventType::UpPressed) {
         MoveSelection(-1);
         return true;
@@ -778,14 +932,14 @@ bool SettingsPageAdapter::HandleEvent(const UiPageEvent& event) {
         return true;
     }
     if (event.type == UiPageEventType::ConfirmPressed) {
-        CycleSelection();
+        OpenPopup();
         return true;
     }
     return false;
 }
 
 void SettingsPageAdapter::MoveSelection(int delta) {
-    constexpr int count = static_cast<int>(sizeof(kSettings) / sizeof(kSettings[0]));
+    constexpr int count = static_cast<int>(sizeof(kSystemSettings) / sizeof(kSystemSettings[0]));
     selected_index_ = (selected_index_ + delta + count) % count;
     ApplySelectionLocked();
     if (host_ != nullptr) {
@@ -797,39 +951,147 @@ void SettingsPageAdapter::LoadSettings() {
     Settings settings(kUiSettingsNamespace, false);
     home_page_index_ = ClampIndex(settings.GetInt(kHomePageKey, 0),
                                   static_cast<int>(sizeof(kHomePageNames) / sizeof(kHomePageNames[0])));
-    answer_language_index_ = ClampIndex(settings.GetInt(kAnswerLanguageKey, 0),
-                                        static_cast<int>(sizeof(kAnswerLanguageNames) /
-                                                         sizeof(kAnswerLanguageNames[0])));
-    answer_auto_draw_ = settings.GetBool(kAnswerAutoDrawKey, true);
+
+    Settings display_settings(kDisplaySettingsNamespace, false);
+    theme_index_ = ThemeIndexFromName(display_settings.GetString(kDisplayThemeKey, "light"));
 }
 
 void SettingsPageAdapter::CycleSelection() {
-    constexpr int setting_count = static_cast<int>(sizeof(kSettings) / sizeof(kSettings[0]));
+    constexpr int setting_count = static_cast<int>(sizeof(kSystemSettings) / sizeof(kSystemSettings[0]));
     if (selected_index_ < 0 || selected_index_ >= setting_count) {
         return;
     }
 
-    {
+    if (selected_index_ == 0) {
         Settings settings(kUiSettingsNamespace, true);
-        if (selected_index_ == 0) {
-            home_page_index_ =
-                (home_page_index_ + 1) % static_cast<int>(sizeof(kHomePageNames) / sizeof(kHomePageNames[0]));
-            settings.SetInt(kHomePageKey, home_page_index_);
-        } else if (selected_index_ == 1) {
-            answer_language_index_ =
-                (answer_language_index_ + 1) %
-                static_cast<int>(sizeof(kAnswerLanguageNames) / sizeof(kAnswerLanguageNames[0]));
-            settings.SetInt(kAnswerLanguageKey, answer_language_index_);
-        } else if (selected_index_ == 2) {
-            answer_auto_draw_ = !answer_auto_draw_;
-            settings.SetBool(kAnswerAutoDrawKey, answer_auto_draw_);
+        home_page_index_ =
+            (home_page_index_ + 1) % static_cast<int>(sizeof(kHomePageNames) / sizeof(kHomePageNames[0]));
+        settings.SetInt(kHomePageKey, home_page_index_);
+    } else if (selected_index_ == 1) {
+        theme_index_ =
+            (theme_index_ + 1) % static_cast<int>(sizeof(kThemeSettingValues) / sizeof(kThemeSettingValues[0]));
+        if (host_ != nullptr) {
+            LvglTheme* theme = LvglThemeManager::GetInstance().GetTheme(kThemeSettingValues[theme_index_]);
+            if (theme != nullptr) {
+                host_->SetTheme(theme);
+            } else {
+                Settings display_settings(kDisplaySettingsNamespace, true);
+                display_settings.SetString(kDisplayThemeKey, kThemeSettingValues[theme_index_]);
+            }
         }
+    } else if (selected_index_ == 2) {
+        StartWifiSetup();
     }
 
     ApplySelectionLocked();
     if (host_ != nullptr) {
         host_->RequestUrgentRefresh();
     }
+}
+
+void SettingsPageAdapter::StartWifiSetup() {
+    wifi_config_started_ = StartConfigPortal("ZecTrix-Setup");
+}
+
+void SettingsPageAdapter::OpenPopup() {
+    if (selected_index_ == 0) {
+        popup_value_index_ = home_page_index_;
+    } else if (selected_index_ == 1) {
+        popup_value_index_ = theme_index_;
+    } else {
+        popup_value_index_ = 0;
+    }
+    popup_active_ = true;
+    SetObjHidden(popup_, false);
+    ApplyPopupLocked();
+    if (host_ != nullptr) {
+        host_->RequestUrgentRefresh();
+    }
+}
+
+void SettingsPageAdapter::MovePopup(int delta) {
+    int count = 0;
+    if (selected_index_ == 0) {
+        count = static_cast<int>(sizeof(kHomePageNames) / sizeof(kHomePageNames[0]));
+    } else if (selected_index_ == 1) {
+        count = static_cast<int>(sizeof(kThemeSettingValues) / sizeof(kThemeSettingValues[0]));
+    }
+    if (count <= 0) {
+        return;
+    }
+    popup_value_index_ = (popup_value_index_ + delta + count) % count;
+    ApplyPopupLocked();
+    if (host_ != nullptr) {
+        host_->RequestUrgentRefresh();
+    }
+}
+
+void SettingsPageAdapter::ClosePopup(bool save) {
+    if (save) {
+        if (selected_index_ == 0) {
+            Settings settings(kUiSettingsNamespace, true);
+            home_page_index_ = ClampIndex(popup_value_index_,
+                                          static_cast<int>(sizeof(kHomePageNames) /
+                                                           sizeof(kHomePageNames[0])));
+            settings.SetInt(kHomePageKey, home_page_index_);
+        } else if (selected_index_ == 1) {
+            theme_index_ = ClampIndex(popup_value_index_,
+                                      static_cast<int>(sizeof(kThemeSettingValues) /
+                                                       sizeof(kThemeSettingValues[0])));
+            if (host_ != nullptr) {
+                LvglTheme* theme = LvglThemeManager::GetInstance().GetTheme(kThemeSettingValues[theme_index_]);
+                if (theme != nullptr) {
+                    host_->SetTheme(theme);
+                } else {
+                    Settings display_settings(kDisplaySettingsNamespace, true);
+                    display_settings.SetString(kDisplayThemeKey, kThemeSettingValues[theme_index_]);
+                }
+            }
+        } else if (selected_index_ == 2) {
+            StartWifiSetup();
+        }
+    }
+
+    popup_active_ = false;
+    SetObjHidden(popup_, true);
+    ApplySelectionLocked();
+    if (host_ != nullptr) {
+        host_->RequestUrgentRefresh();
+    }
+}
+
+void SettingsPageAdapter::ApplyPopupLocked() {
+    if (!built_ || popup_ == nullptr || !popup_active_) {
+        return;
+    }
+
+    const char* title = selected_index_ >= 0 && selected_index_ < 3
+        ? kSystemSettings[selected_index_].title
+        : "设置";
+    const char* value = "--";
+    const char* detail = "";
+    const char* hint = "上/下调整 · 确认保存";
+
+    if (selected_index_ == 0) {
+        value = kHomePageNames[ClampIndex(popup_value_index_,
+                                          static_cast<int>(sizeof(kHomePageNames) /
+                                                           sizeof(kHomePageNames[0])))];
+        detail = "选择开机默认页面";
+    } else if (selected_index_ == 1) {
+        value = kThemeSettingNames[ClampIndex(popup_value_index_,
+                                              static_cast<int>(sizeof(kThemeSettingNames) /
+                                                               sizeof(kThemeSettingNames[0])))];
+        detail = "选择显示主题";
+    } else if (selected_index_ == 2) {
+        value = wifi_config_started_ ? "已启动" : "启动热点";
+        detail = "手机连接 ZecTrix-Setup";
+        hint = "确认启动 · 长按下取消";
+    }
+
+    lv_label_set_text(popup_title_label_, title);
+    lv_label_set_text(popup_value_label_, value);
+    lv_label_set_text(popup_detail_label_, detail);
+    lv_label_set_text(popup_hint_label_, hint);
 }
 
 void SettingsPageAdapter::ApplySelectionLocked() {
@@ -839,14 +1101,14 @@ void SettingsPageAdapter::ApplySelectionLocked() {
 
     RefreshStatusLabel(status_label_);
 
-    for (size_t i = 0; i < sizeof(kSettings) / sizeof(kSettings[0]); ++i) {
+    for (size_t i = 0; i < sizeof(kSystemSettings) / sizeof(kSystemSettings[0]); ++i) {
         const char* value = "";
         if (i == 0) {
             value = kHomePageNames[home_page_index_];
         } else if (i == 1) {
-            value = kAnswerLanguageNames[answer_language_index_];
+            value = kThemeSettingNames[theme_index_];
         } else if (i == 2) {
-            value = answer_auto_draw_ ? "开" : "关";
+            value = wifi_config_started_ ? "已启动" : "启动";
         }
 
         char buf[96];
@@ -854,7 +1116,7 @@ void SettingsPageAdapter::ApplySelectionLocked() {
                  sizeof(buf),
                  "%s %s：%s",
                  selected_index_ == static_cast<int>(i) ? ">" : " ",
-                 kSettings[i].title,
+                 kSystemSettings[i].title,
                  value);
         lv_label_set_text(item_labels_[i], buf);
     }
@@ -863,18 +1125,483 @@ void SettingsPageAdapter::ApplySelectionLocked() {
     if (selected_index_ == 0) {
         snprintf(detail_buf,
                  sizeof(detail_buf),
-                 "已保存首页：%s。下次开机生效。",
+                 "首页：%s，下次开机生效。",
                  kHomePageNames[home_page_index_]);
     } else if (selected_index_ == 1) {
         snprintf(detail_buf,
                  sizeof(detail_buf),
-                 "答案之书当前显示：%s。保存后立即影响下次翻页。",
-                 kAnswerLanguageNames[answer_language_index_]);
+                 "主题：%s，设置会保存。",
+                 kThemeSettingNames[theme_index_]);
     } else {
         snprintf(detail_buf,
                  sizeof(detail_buf),
-                 "自动翻页：%s。开启后进入答案之书会自动随机一页。",
-                 answer_auto_draw_ ? "开" : "关");
+                 "%s，手机连 ZecTrix-Setup，打开 192.168.4.1。",
+                 wifi_config_started_ ? "配网热点已启动" : "确认键开启配置热点");
     }
     lv_label_set_text(detail_label_, detail_buf);
+    ApplyPopupLocked();
+}
+
+ModuleSettingsPageAdapter::ModuleSettingsPageAdapter(LcdDisplay* host) : host_(host) {}
+
+UiPageId ModuleSettingsPageAdapter::Id() const { return UiPageId::ModuleSettings; }
+const char* ModuleSettingsPageAdapter::Name() const { return "ModuleSettings"; }
+
+void ModuleSettingsPageAdapter::Build() {
+    if (built_ || host_ == nullptr) {
+        built_ = true;
+        return;
+    }
+
+    const lv_font_t* text_font = TextFont(host_);
+    const lv_font_t* body_font = BodyFont(host_);
+
+    screen_ = lv_obj_create(nullptr);
+    StyleScreen(screen_);
+    AddHeader(screen_, body_font, text_font, "模块设置", "SET");
+    status_label_ = CreateStatusLabel(screen_, text_font);
+
+    title_label_ = lv_label_create(screen_);
+    StyleLabel(title_label_, text_font);
+    lv_obj_set_width(title_label_, 310);
+    lv_label_set_long_mode(title_label_, LV_LABEL_LONG_DOT);
+    lv_label_set_text(title_label_, "当前模块");
+    lv_obj_align(title_label_, LV_ALIGN_TOP_LEFT, 58, 48);
+
+    for (size_t i = 0; i < sizeof(item_labels_) / sizeof(item_labels_[0]); ++i) {
+        item_labels_[i] = lv_label_create(screen_);
+        StyleLabel(item_labels_[i], text_font);
+        lv_obj_set_width(item_labels_[i], 310);
+        lv_label_set_long_mode(item_labels_[i], LV_LABEL_LONG_DOT);
+        lv_obj_align(item_labels_[i], LV_ALIGN_TOP_LEFT, 58, 94 + static_cast<int>(i) * 38);
+    }
+
+    detail_label_ = lv_label_create(screen_);
+    StyleLabel(detail_label_, text_font);
+    lv_obj_set_width(detail_label_, 310);
+    lv_obj_set_height(detail_label_, 24);
+    lv_label_set_long_mode(detail_label_, LV_LABEL_LONG_DOT);
+    lv_label_set_text(detail_label_, "");
+    lv_obj_align(detail_label_, LV_ALIGN_BOTTOM_LEFT, 58, -46);
+
+    lv_obj_t* hint = lv_label_create(screen_);
+    StyleLabel(hint, text_font);
+    lv_obj_set_width(hint, 310);
+    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(hint, "上/下选择 · 确认 · 长按下返回");
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_LEFT, 58, -16);
+
+    CreateSettingPopup(screen_,
+                       body_font,
+                       text_font,
+                       &popup_,
+                       &popup_title_label_,
+                       &popup_value_label_,
+                       &popup_detail_label_,
+                       &popup_hint_label_);
+
+    built_ = true;
+    LoadSettings();
+    ApplySelectionLocked();
+}
+
+lv_obj_t* ModuleSettingsPageAdapter::Screen() const { return screen_; }
+
+void ModuleSettingsPageAdapter::OnShow() {
+    popup_active_ = false;
+    SetObjHidden(popup_, true);
+    LoadSettings();
+    ApplySelectionLocked();
+}
+
+bool ModuleSettingsPageAdapter::HandleEvent(const UiPageEvent& event) {
+    if (popup_active_) {
+        if (event.type == UiPageEventType::UpPressed) {
+            MovePopup(-1);
+            return true;
+        }
+        if (event.type == UiPageEventType::DownPressed) {
+            MovePopup(1);
+            return true;
+        }
+        if (event.type == UiPageEventType::ConfirmPressed) {
+            ClosePopup(true);
+            return true;
+        }
+        if (event.type == UiPageEventType::DownLongPressed) {
+            ClosePopup(false);
+            return true;
+        }
+        return true;
+    }
+
+    if (event.type == UiPageEventType::UpPressed) {
+        MoveSelection(-1);
+        return true;
+    }
+    if (event.type == UiPageEventType::DownPressed) {
+        MoveSelection(1);
+        return true;
+    }
+    if (event.type == UiPageEventType::ConfirmPressed) {
+        OpenPopup();
+        return true;
+    }
+    if (event.type == UiPageEventType::DownLongPressed) {
+        ReturnToOwner();
+        return true;
+    }
+    return false;
+}
+
+void ModuleSettingsPageAdapter::SetOwnerPage(UiPageId owner_page_id) {
+    owner_page_id_ = owner_page_id;
+    selected_index_ = 0;
+    popup_active_ = false;
+    SetObjHidden(popup_, true);
+    LoadSettings();
+    ApplySelectionLocked();
+}
+
+int ModuleSettingsPageAdapter::ItemCount() const {
+    if (owner_page_id_ == UiPageId::BitcoinPrice) {
+        return 4;
+    }
+    if (owner_page_id_ == UiPageId::AnswerBook ||
+        owner_page_id_ == UiPageId::MealPicker) {
+        return 2;
+    }
+    return 1;
+}
+
+void ModuleSettingsPageAdapter::MoveSelection(int delta) {
+    const int count = ItemCount();
+    selected_index_ = (selected_index_ + delta + count) % count;
+    ApplySelectionLocked();
+    if (host_ != nullptr) {
+        host_->RequestUrgentRefresh();
+    }
+}
+
+void ModuleSettingsPageAdapter::LoadSettings() {
+    Settings answer_settings(kUiSettingsNamespace, false);
+    answer_language_index_ = ClampIndex(answer_settings.GetInt(kAnswerLanguageKey, 0),
+                                        static_cast<int>(sizeof(kAnswerLanguageNames) /
+                                                         sizeof(kAnswerLanguageNames[0])));
+    answer_auto_draw_ = answer_settings.GetBool(kAnswerAutoDrawKey, true);
+}
+
+void ModuleSettingsPageAdapter::CycleSelection() {
+    const int count = ItemCount();
+    if (selected_index_ < 0 || selected_index_ >= count) {
+        return;
+    }
+
+    if (owner_page_id_ == UiPageId::BitcoinPrice) {
+        if (selected_index_ == 0) {
+            MarketWatchlist::MoveCurrent(1, nullptr);
+            Application::GetInstance().RequestBitcoinPriceRefresh();
+        } else if (selected_index_ == 3) {
+            market_config_started_ = StartConfigPortal("ZecTrix-Setup");
+        }
+    } else if (owner_page_id_ == UiPageId::AnswerBook) {
+        Settings answer_settings(kUiSettingsNamespace, true);
+        if (selected_index_ == 0) {
+            answer_language_index_ =
+                (answer_language_index_ + 1) %
+                static_cast<int>(sizeof(kAnswerLanguageNames) / sizeof(kAnswerLanguageNames[0]));
+            answer_settings.SetInt(kAnswerLanguageKey, answer_language_index_);
+        } else if (selected_index_ == 1) {
+            answer_auto_draw_ = !answer_auto_draw_;
+            answer_settings.SetBool(kAnswerAutoDrawKey, answer_auto_draw_);
+        }
+    }
+
+    ApplySelectionLocked();
+    if (host_ != nullptr) {
+        host_->RequestUrgentRefresh();
+    }
+}
+
+void ModuleSettingsPageAdapter::OpenPopup() {
+    if (owner_page_id_ == UiPageId::BitcoinPrice && selected_index_ == 0) {
+        popup_value_index_ = MarketWatchlist::CurrentIndex();
+    } else if (owner_page_id_ == UiPageId::AnswerBook && selected_index_ == 0) {
+        popup_value_index_ = answer_language_index_;
+    } else if (owner_page_id_ == UiPageId::AnswerBook && selected_index_ == 1) {
+        popup_value_index_ = answer_auto_draw_ ? 1 : 0;
+    } else {
+        popup_value_index_ = 0;
+    }
+
+    popup_active_ = true;
+    SetObjHidden(popup_, false);
+    ApplyPopupLocked();
+    if (host_ != nullptr) {
+        host_->RequestUrgentRefresh();
+    }
+}
+
+void ModuleSettingsPageAdapter::MovePopup(int delta) {
+    int count = 0;
+    if (owner_page_id_ == UiPageId::BitcoinPrice && selected_index_ == 0) {
+        count = std::max(1, MarketWatchlist::Count());
+    } else if (owner_page_id_ == UiPageId::AnswerBook && selected_index_ == 0) {
+        count = static_cast<int>(sizeof(kAnswerLanguageNames) / sizeof(kAnswerLanguageNames[0]));
+    } else if (owner_page_id_ == UiPageId::AnswerBook && selected_index_ == 1) {
+        count = 2;
+    }
+    if (count <= 0) {
+        return;
+    }
+    popup_value_index_ = (popup_value_index_ + delta + count) % count;
+    ApplyPopupLocked();
+    if (host_ != nullptr) {
+        host_->RequestUrgentRefresh();
+    }
+}
+
+void ModuleSettingsPageAdapter::ClosePopup(bool save) {
+    if (save) {
+        if (owner_page_id_ == UiPageId::BitcoinPrice) {
+            if (selected_index_ == 0) {
+                MarketWatchlist::SetCurrentIndex(popup_value_index_);
+                Application::GetInstance().RequestBitcoinPriceRefresh();
+            } else if (selected_index_ == 3) {
+                market_config_started_ = StartConfigPortal("ZecTrix-Setup");
+            }
+        } else if (owner_page_id_ == UiPageId::AnswerBook) {
+            Settings answer_settings(kUiSettingsNamespace, true);
+            if (selected_index_ == 0) {
+                answer_language_index_ = ClampIndex(popup_value_index_,
+                                                    static_cast<int>(sizeof(kAnswerLanguageNames) /
+                                                                     sizeof(kAnswerLanguageNames[0])));
+                answer_settings.SetInt(kAnswerLanguageKey, answer_language_index_);
+            } else if (selected_index_ == 1) {
+                answer_auto_draw_ = popup_value_index_ != 0;
+                answer_settings.SetBool(kAnswerAutoDrawKey, answer_auto_draw_);
+            }
+        }
+    }
+
+    popup_active_ = false;
+    SetObjHidden(popup_, true);
+    ApplySelectionLocked();
+    if (host_ != nullptr) {
+        host_->RequestUrgentRefresh();
+    }
+}
+
+void ModuleSettingsPageAdapter::ReturnToOwner() {
+    if (host_ == nullptr) {
+        return;
+    }
+    host_->SwitchPage(owner_page_id_);
+    host_->RequestUrgentRefresh();
+}
+
+void ModuleSettingsPageAdapter::ApplyPopupLocked() {
+    if (!built_ || popup_ == nullptr || !popup_active_) {
+        return;
+    }
+
+    char title_buf[40];
+    char value_buf[64];
+    char detail_buf[96];
+    const char* hint = "上/下调整 · 确认保存";
+    snprintf(title_buf, sizeof(title_buf), "设置");
+    snprintf(value_buf, sizeof(value_buf), "--");
+    detail_buf[0] = '\0';
+
+    if (owner_page_id_ == UiPageId::BitcoinPrice) {
+        if (selected_index_ == 0) {
+            const auto items = MarketWatchlist::Load();
+            const int count = std::max(1, static_cast<int>(items.size()));
+            popup_value_index_ = (popup_value_index_ % count + count) % count;
+            const MarketWatchItem item = items.empty() ? MarketWatchlist::Current() : items[popup_value_index_];
+            snprintf(title_buf, sizeof(title_buf), "当前标的");
+            snprintf(value_buf, sizeof(value_buf), "%s", item.name.c_str());
+            snprintf(detail_buf, sizeof(detail_buf), "%s · %d/%d",
+                     item.symbol.c_str(),
+                     popup_value_index_ + 1,
+                     count);
+        } else if (selected_index_ == 1) {
+            snprintf(title_buf, sizeof(title_buf), "自选数量");
+            snprintf(value_buf, sizeof(value_buf), "%d / %d", MarketWatchlist::Count(), MarketWatchlist::kMaxItems);
+            snprintf(detail_buf, sizeof(detail_buf), "手机配置页可编辑");
+            hint = "确认关闭 · 长按下取消";
+        } else if (selected_index_ == 2) {
+            snprintf(title_buf, sizeof(title_buf), "刷新周期");
+            snprintf(value_buf, sizeof(value_buf), "30 分钟");
+            snprintf(detail_buf, sizeof(detail_buf), "当前为固定周期");
+            hint = "确认关闭 · 长按下取消";
+        } else {
+            snprintf(title_buf, sizeof(title_buf), "手机配置");
+            snprintf(value_buf, sizeof(value_buf), "%s", market_config_started_ ? "已启动" : "启动热点");
+            snprintf(detail_buf, sizeof(detail_buf), "手机连 ZecTrix-Setup");
+            hint = "确认启动 · 长按下取消";
+        }
+    } else if (owner_page_id_ == UiPageId::AnswerBook) {
+        if (selected_index_ == 0) {
+            popup_value_index_ = ClampIndex(popup_value_index_,
+                                            static_cast<int>(sizeof(kAnswerLanguageNames) /
+                                                             sizeof(kAnswerLanguageNames[0])));
+            snprintf(title_buf, sizeof(title_buf), "答案显示");
+            snprintf(value_buf, sizeof(value_buf), "%s", kAnswerLanguageNames[popup_value_index_]);
+            snprintf(detail_buf, sizeof(detail_buf), "选择答案语言");
+        } else {
+            popup_value_index_ = popup_value_index_ == 0 ? 0 : 1;
+            snprintf(title_buf, sizeof(title_buf), "自动翻页");
+            snprintf(value_buf, sizeof(value_buf), "%s", popup_value_index_ ? "开" : "关");
+            snprintf(detail_buf, sizeof(detail_buf), "进入页面是否自动抽取");
+        }
+    } else if (owner_page_id_ == UiPageId::MealPicker) {
+        snprintf(title_buf, sizeof(title_buf), selected_index_ == 0 ? "店铺列表" : "随机规则");
+        snprintf(value_buf, sizeof(value_buf), selected_index_ == 0 ? "固件内置" : "避免重复");
+        snprintf(detail_buf, sizeof(detail_buf), "当前版本不可调整");
+        hint = "确认关闭 · 长按下取消";
+    } else if (owner_page_id_ == UiPageId::Almanac) {
+        snprintf(title_buf, sizeof(title_buf), "运势日期");
+        snprintf(value_buf, sizeof(value_buf), "RTC 当天");
+        snprintf(detail_buf, sizeof(detail_buf), "按当前日期生成");
+        hint = "确认关闭 · 长按下取消";
+    } else if (owner_page_id_ == UiPageId::CalendarTime) {
+        snprintf(title_buf, sizeof(title_buf), "时间来源");
+        snprintf(value_buf, sizeof(value_buf), "板载 RTC");
+        snprintf(detail_buf, sizeof(detail_buf), "联网校时后续可加");
+        hint = "确认关闭 · 长按下取消";
+    }
+
+    lv_label_set_text(popup_title_label_, title_buf);
+    lv_label_set_text(popup_value_label_, value_buf);
+    lv_label_set_text(popup_detail_label_, detail_buf);
+    lv_label_set_text(popup_hint_label_, hint);
+}
+
+void ModuleSettingsPageAdapter::ApplySelectionLocked() {
+    if (!built_ || screen_ == nullptr) {
+        return;
+    }
+
+    RefreshStatusLabel(status_label_);
+
+    char title_buf[64];
+    snprintf(title_buf, sizeof(title_buf), "%s 的设置", PageTitle(owner_page_id_));
+    lv_label_set_text(title_label_, title_buf);
+
+    const int count = ItemCount();
+    for (size_t i = 0; i < sizeof(item_labels_) / sizeof(item_labels_[0]); ++i) {
+        if (item_labels_[i] == nullptr) {
+            continue;
+        }
+        if (static_cast<int>(i) >= count) {
+            lv_label_set_text(item_labels_[i], "");
+            continue;
+        }
+
+        const char* title = "";
+        const char* value = "";
+        if (owner_page_id_ == UiPageId::BitcoinPrice) {
+            const auto items = MarketWatchlist::Load();
+            const int current_index = items.empty() ? 0 : MarketWatchlist::CurrentIndex();
+            const MarketWatchItem current = items.empty() ? MarketWatchlist::Current() : items[current_index];
+            char market_count[16];
+            snprintf(market_count, sizeof(market_count), "%d / %d",
+                     static_cast<int>(items.empty() ? 1 : items.size()),
+                     MarketWatchlist::kMaxItems);
+            title = i == 0 ? "当前标的" : (i == 1 ? "自选数量" : (i == 2 ? "刷新周期" : "手机配置"));
+            if (i == 0) {
+                value = current.name.c_str();
+            } else if (i == 1) {
+                value = market_count;
+            } else if (i == 2) {
+                value = "30 分钟";
+            } else {
+                value = market_config_started_ ? "已启动" : "启动";
+            }
+
+            char item_buf[96];
+            snprintf(item_buf,
+                     sizeof(item_buf),
+                     "%s %s：%s",
+                     selected_index_ == static_cast<int>(i) ? ">" : " ",
+                     title,
+                     value);
+            lv_label_set_text(item_labels_[i], item_buf);
+            continue;
+        } else if (owner_page_id_ == UiPageId::AnswerBook) {
+            title = i == 0 ? "答案显示" : "自动翻页";
+            value = i == 0 ? kAnswerLanguageNames[answer_language_index_] :
+                              (answer_auto_draw_ ? "开" : "关");
+        } else if (owner_page_id_ == UiPageId::MealPicker) {
+            title = i == 0 ? "店铺列表" : "随机规则";
+            value = i == 0 ? "固件内置" : "避免重复";
+        } else if (owner_page_id_ == UiPageId::Almanac) {
+            title = "运势日期";
+            value = "RTC 当天";
+        } else if (owner_page_id_ == UiPageId::CalendarTime) {
+            title = "时间来源";
+            value = "板载 RTC";
+        } else {
+            title = "模块";
+            value = "暂无设置";
+        }
+
+        char item_buf[96];
+        snprintf(item_buf,
+                 sizeof(item_buf),
+                 "%s %s：%s",
+                 selected_index_ == static_cast<int>(i) ? ">" : " ",
+                 title,
+                 value);
+        lv_label_set_text(item_labels_[i], item_buf);
+    }
+
+    char detail_buf[180];
+    if (owner_page_id_ == UiPageId::BitcoinPrice) {
+        if (selected_index_ == 0) {
+            snprintf(detail_buf,
+                     sizeof(detail_buf),
+                     "确认切换自选股；行情页上/下也可切换。");
+        } else if (selected_index_ == 1) {
+            snprintf(detail_buf,
+                     sizeof(detail_buf),
+                     "自选股本地保存，最多 20 只。");
+        } else if (selected_index_ == 2) {
+            snprintf(detail_buf,
+                     sizeof(detail_buf),
+                     "当前固定 30 分钟自动刷新。");
+        } else {
+            snprintf(detail_buf,
+                     sizeof(detail_buf),
+                     "%s，手机连 ZecTrix-Setup，打开 192.168.4.1。",
+                     market_config_started_ ? "配置热点已启动" : "确认键启动配置热点");
+        }
+    } else if (owner_page_id_ == UiPageId::AnswerBook) {
+        if (selected_index_ == 0) {
+            snprintf(detail_buf,
+                     sizeof(detail_buf),
+                     "确认切换中文、英文或双语。");
+        } else {
+            snprintf(detail_buf,
+                     sizeof(detail_buf),
+                     "开启后进入页面自动抽一页。");
+        }
+    } else if (owner_page_id_ == UiPageId::MealPicker) {
+        snprintf(detail_buf,
+                 sizeof(detail_buf),
+                 "店铺列表固件内置，随机避免重复。");
+    } else if (owner_page_id_ == UiPageId::Almanac) {
+        snprintf(detail_buf,
+                 sizeof(detail_buf),
+                 "按当天日期生成运势，确认可换签。");
+    } else if (owner_page_id_ == UiPageId::CalendarTime) {
+        snprintf(detail_buf,
+                 sizeof(detail_buf),
+                 "日期时间来自板载 RTC。");
+    } else {
+        snprintf(detail_buf, sizeof(detail_buf), "这个模块暂无设置。");
+    }
+    lv_label_set_text(detail_label_, detail_buf);
+    ApplyPopupLocked();
 }

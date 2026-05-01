@@ -15,6 +15,8 @@ enum class UiPageId : uint8_t {
     Almanac = 4,
     CalendarTime = 5,
     Settings = 6,
+    BitcoinPrice = 7,
+    ModuleSettings = 8,
 };
 
 enum class UiPageEventType : uint8_t {
@@ -22,6 +24,7 @@ enum class UiPageEventType : uint8_t {
     ConfirmPressed = 1,
     UpPressed = 2,
     DownPressed = 3,
+    DownLongPressed = 4,
 };
 
 struct UiPageEvent {
