@@ -56,19 +56,25 @@ bool RtcPcf8563::Init(gpio_num_t int_gpio) {
 }
 
 bool RtcPcf8563::SetTime(const tm& local_tm) {
-    WriteReg(kRegSeconds, ToBcd(local_tm.tm_sec) & 0x7F);
-    WriteReg(kRegMinutes, ToBcd(local_tm.tm_min) & 0x7F);
-    WriteReg(kRegHours, ToBcd(local_tm.tm_hour) & 0x3F);
-    WriteReg(kRegDays, ToBcd(local_tm.tm_mday) & 0x3F);
-    WriteReg(kRegWeekdays, ToBcd(local_tm.tm_wday) & 0x07);
-    WriteReg(kRegMonths, ToBcd(local_tm.tm_mon + 1) & 0x1F);
-    WriteReg(kRegYears, ToBcd(local_tm.tm_year % 100));
-    return true;
+    return TryWriteReg(kRegSeconds, ToBcd(local_tm.tm_sec) & 0x7F) &&
+           TryWriteReg(kRegMinutes, ToBcd(local_tm.tm_min) & 0x7F) &&
+           TryWriteReg(kRegHours, ToBcd(local_tm.tm_hour) & 0x3F) &&
+           TryWriteReg(kRegDays, ToBcd(local_tm.tm_mday) & 0x3F) &&
+           TryWriteReg(kRegWeekdays, ToBcd(local_tm.tm_wday) & 0x07) &&
+           TryWriteReg(kRegMonths, ToBcd(local_tm.tm_mon + 1) & 0x1F) &&
+           TryWriteReg(kRegYears, ToBcd(local_tm.tm_year % 100));
 }
 
 bool RtcPcf8563::GetTime(tm& out_local_tm) {
     uint8_t buf[7] = {};
-    ReadRegs(kRegSeconds, buf, sizeof(buf));
+    if (!TryReadRegs(kRegSeconds, buf, sizeof(buf))) {
+        ESP_LOGW(kTag, "RTC time read failed");
+        return false;
+    }
+    if ((buf[0] & 0x80) != 0) {
+        ESP_LOGW(kTag, "RTC time invalid after voltage loss");
+        return false;
+    }
 
     out_local_tm.tm_sec = FromBcd(buf[0] & 0x7F);
     out_local_tm.tm_min = FromBcd(buf[1] & 0x7F);
@@ -82,76 +88,108 @@ bool RtcPcf8563::GetTime(tm& out_local_tm) {
 }
 
 bool RtcPcf8563::SetAlarm(const tm& target_local_tm) {
-    WriteReg(kRegAlarmMinute, ToBcd(target_local_tm.tm_min) & 0x7F);
-    WriteReg(kRegAlarmHour, ToBcd(target_local_tm.tm_hour) & 0x3F);
-    WriteReg(kRegAlarmDay, ToBcd(target_local_tm.tm_mday) & 0x3F);
-    WriteReg(kRegAlarmWeekday, kAlarmDisableBit);
+    if (!TryWriteReg(kRegAlarmMinute, ToBcd(target_local_tm.tm_min) & 0x7F) ||
+        !TryWriteReg(kRegAlarmHour, ToBcd(target_local_tm.tm_hour) & 0x3F) ||
+        !TryWriteReg(kRegAlarmDay, ToBcd(target_local_tm.tm_mday) & 0x3F) ||
+        !TryWriteReg(kRegAlarmWeekday, kAlarmDisableBit)) {
+        return false;
+    }
 
-    ClearAlarmFlag();
+    if (!ClearAlarmFlag()) {
+        return false;
+    }
     return EnableInterrupt(true);
 }
 
 bool RtcPcf8563::DisableAlarm() {
-    WriteReg(kRegAlarmMinute, kAlarmDisableBit);
-    WriteReg(kRegAlarmHour, kAlarmDisableBit);
-    WriteReg(kRegAlarmDay, kAlarmDisableBit);
-    WriteReg(kRegAlarmWeekday, kAlarmDisableBit);
+    if (!TryWriteReg(kRegAlarmMinute, kAlarmDisableBit) ||
+        !TryWriteReg(kRegAlarmHour, kAlarmDisableBit) ||
+        !TryWriteReg(kRegAlarmDay, kAlarmDisableBit) ||
+        !TryWriteReg(kRegAlarmWeekday, kAlarmDisableBit)) {
+        return false;
+    }
     return EnableInterrupt(false);
 }
 
 bool RtcPcf8563::ClearAlarmFlag() {
-    uint8_t ctrl2 = ReadReg(kRegCtrl2) & kCtrl2WritableMask;
+    uint8_t ctrl2 = 0;
+    if (!TryReadReg(kRegCtrl2, &ctrl2)) {
+        return false;
+    }
+    ctrl2 &= kCtrl2WritableMask;
     ctrl2 &= ~kCtrl2AlarmFlag; // clear AF(bit3)
-    WriteReg(kRegCtrl2, ctrl2);
-    return true;
+    return TryWriteReg(kRegCtrl2, ctrl2);
 }
 
 bool RtcPcf8563::EnableInterrupt(bool enable) {
-    uint8_t ctrl2 = ReadReg(kRegCtrl2) & kCtrl2WritableMask;
+    uint8_t ctrl2 = 0;
+    if (!TryReadReg(kRegCtrl2, &ctrl2)) {
+        return false;
+    }
+    ctrl2 &= kCtrl2WritableMask;
     if (enable) {
         ctrl2 |= kCtrl2AlarmIntEnable;
     } else {
         ctrl2 &= ~kCtrl2AlarmIntEnable;
     }
-    WriteReg(kRegCtrl2, ctrl2);
-    return true;
+    return TryWriteReg(kRegCtrl2, ctrl2);
 }
 
 bool RtcPcf8563::IsAlarmFired() {
-    uint8_t ctrl2 = ReadReg(kRegCtrl2);
+    uint8_t ctrl2 = 0;
+    if (!TryReadReg(kRegCtrl2, &ctrl2)) {
+        return false;
+    }
     return (ctrl2 & kCtrl2AlarmFlag) != 0;
 }
 
 bool RtcPcf8563::StartCountdownTimer(uint8_t seconds) {
     const uint8_t timer_value = seconds == 0 ? 1 : seconds;
-    StopCountdownTimer();
-    ClearTimerFlag();
-    WriteReg(kRegTimerValue, timer_value);
-    WriteReg(kRegTimerControl, static_cast<uint8_t>(kTimerEnable | kTimerFreq1Hz));
+    if (!StopCountdownTimer() || !ClearTimerFlag()) {
+        return false;
+    }
+    if (!TryWriteReg(kRegTimerValue, timer_value) ||
+        !TryWriteReg(kRegTimerControl, static_cast<uint8_t>(kTimerEnable | kTimerFreq1Hz))) {
+        return false;
+    }
 
-    uint8_t ctrl2 = ReadReg(kRegCtrl2) & kCtrl2WritableMask;
+    uint8_t ctrl2 = 0;
+    if (!TryReadReg(kRegCtrl2, &ctrl2)) {
+        return false;
+    }
+    ctrl2 &= kCtrl2WritableMask;
     ctrl2 |= kCtrl2TimerIntEnable;
-    WriteReg(kRegCtrl2, ctrl2);
-    return true;
+    return TryWriteReg(kRegCtrl2, ctrl2);
 }
 
 bool RtcPcf8563::StopCountdownTimer() {
-    WriteReg(kRegTimerControl, 0x00);
-    uint8_t ctrl2 = ReadReg(kRegCtrl2) & kCtrl2WritableMask;
+    if (!TryWriteReg(kRegTimerControl, 0x00)) {
+        return false;
+    }
+    uint8_t ctrl2 = 0;
+    if (!TryReadReg(kRegCtrl2, &ctrl2)) {
+        return false;
+    }
+    ctrl2 &= kCtrl2WritableMask;
     ctrl2 &= ~kCtrl2TimerIntEnable;
-    WriteReg(kRegCtrl2, ctrl2);
-    return true;
+    return TryWriteReg(kRegCtrl2, ctrl2);
 }
 
 bool RtcPcf8563::ClearTimerFlag() {
-    uint8_t ctrl2 = ReadReg(kRegCtrl2) & kCtrl2WritableMask;
+    uint8_t ctrl2 = 0;
+    if (!TryReadReg(kRegCtrl2, &ctrl2)) {
+        return false;
+    }
+    ctrl2 &= kCtrl2WritableMask;
     ctrl2 &= ~kCtrl2TimerFlag;
-    WriteReg(kRegCtrl2, ctrl2);
-    return true;
+    return TryWriteReg(kRegCtrl2, ctrl2);
 }
 
 bool RtcPcf8563::IsTimerFired() {
-    uint8_t ctrl2 = ReadReg(kRegCtrl2);
+    uint8_t ctrl2 = 0;
+    if (!TryReadReg(kRegCtrl2, &ctrl2)) {
+        return false;
+    }
     return (ctrl2 & kCtrl2TimerFlag) != 0;
 }
 
